@@ -12,8 +12,9 @@ CLI は原生に、web は wasm にコンパイルして共有する。出力 JS
 
 1. デコード（CLI: 原生 libvips / web: wasm-vips）。
 2. autorotate: EXIF Orientation を適用（HASH.AUTOROTATE = true）。
-3. alpha があれば背景 255（白, FLATTEN_BG）で平坦化。
-4. ICC があれば sRGB へ変換（なければ sRGB とみなす）。
+3. ICC があれば sRGB へ変換（なければ sRGB とみなす）。
+4. alpha があれば背景 255（白, FLATTEN_BG）で平坦化。**core が行う**（決定性のため両端共有・
+   `core::preprocess::flatten_on_white`）。sRGB 空間で白(255,255,255)に straight-alpha 合成し、alpha=255 にする。
 5. 9x8 に**強制**リサイズ（アスペクト無視、kernel = linear）。リサイズは core 内で行い確定的にする。
 6. 各ピクセルを 8bit グレースケール化: `gray = round(0.299*R + 0.587*G + 0.114*B)`（Rec.601）。
 7. 各行で隣接ピクセル `left < right` を 1 ビット。ビット順は**行優先**（上→下、各行 左→右）、計 64 ビット。
@@ -21,7 +22,11 @@ CLI は原生に、web は wasm にコンパイルして共有する。出力 JS
 
 距離 = `popcount(a XOR b)`。
 
-> 前処理 1〜4 は「デコード側」（libvips / wasm-vips）が行い、5〜8 を core が行う。
+> 前処理 1〜3（デコード・autorotate・sRGB）は「デコード側」（libvips / wasm-vips）が、
+> 4〜8（白平坦化・リサイズ・グレースケール・dHash）は core が行う。pixelSha256 は手順 4 の後の
+> **RGBA バイト列**の SHA-256（白平坦化で alpha=255 のため RGB と 1:1。両端が `flatten_on_white` の出力を
+> そのままハッシュすれば一致する）。
+> 手順 3↔4 の順序は旧版から入れ替わったが（白合成を sRGB 空間で行う）、dhash-1 は未公開のため版は据え置く。
 > **golden 夹具**: `tests/` に固定画像と既知 dHash を置き、CLI/web 両ビルドが同値を出すか検証する
 > （実装前にこの基準を用意する）。
 
@@ -40,7 +45,7 @@ CLI は原生に、web は wasm にコンパイルして共有する。出力 JS
 
 `pixelSha256` は全分解能デコード + 全画素ハッシュで**索引中もっとも高コスト**なため、全画像には算出しない。
 
-- **根拠**: `pixelSha256` と `dHash` は同一の正規化ピクセル（autorotate → 白平坦化 → sRGB）から
+- **根拠**: `pixelSha256` と `dHash` は同一の正規化ピクセル（autorotate → sRGB → 白平坦化）から
   導出される。ピクセルが完全一致するなら 9x8 縮小も一致 → **dHash も完全一致（距離 0）**。
   つまり pixel 重複になり得るのは「**dHash が他と完全一致する画像**」に限られる。
 - **手順**: 全画像の `dHash` を計算 → dHash 値で HashMap グルーピング（O(N)）→
@@ -54,7 +59,7 @@ CLI は原生に、web は wasm にコンパイルして共有する。出力 JS
 
 ## 3. compare の各種スコア
 
-- **pixelDiffRatio**: dimsEqual のとき。前処理 3〜4（白平坦化・sRGB）後の RGB で、各ピクセルの
+- **pixelDiffRatio**: dimsEqual のとき。sRGB 化・白平坦化の後の RGB で、各ピクセルの
   いずれかのチャンネル差 `|a-b| > T`（既定 T=0）を「差分」とし、差分数 / 総ピクセル数。
 - **SSIM**: §1 のグレースケール上で計算。窓 8x8 一様、データ範囲 L=255、K1=0.01 / K2=0.03、
   全窓平均を 0..1 で返す。窓は **スライド step=1・完全窓のみ**（左上 x:0..=W-8, y:0..=H-8）、
@@ -71,10 +76,15 @@ CLI は原生に、web は wasm にコンパイルして共有する。出力 JS
 全出力に `producer { app, appVersion, vips, hashAlgo }` を付与。
 
 - `ScanReport`: `images[]` + `groups[]` + `skippedFiles[]` + `stats`。
+  **決定性のため `images[]` と `skippedFiles[]` は path 昇順**（`groups[]` は §5 の通り最小メンバ path 昇順）。
 - `CompareResult`: `a` / `b` の `ImageRecord` + 各種スコア。比較不能時は §3 の通り null。
 
 `ImageRecord.path` は scan ではルートからの相対パス（`/` 区切り）、compare では入力で与えたパス。
 `AssetRef` は `{kind:"path"}` か `{kind:"dataUri"}`（CLI はパス、web は data URI）。
+
+> **CLI の stdout 既定は要約**（`groups[]` + `skippedFiles[]` + `stats` + `producer`、`images[]` を除く）。
+> 数千枚で巨大な `images[]` を出して AI のトークンを浪費しないため。完全な `ScanReport`（`images[]` 込み）は
+> `--full`（stdout）または `--json <file>`（ファイル）で得る。要約は `kind:"scan"` のままだが `images[]` を持たない部分形。
 
 ## 5. グループ化（clustering）
 
