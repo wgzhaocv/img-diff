@@ -1,78 +1,71 @@
-use clap::{Parser, ValueEnum};
-use std::path::PathBuf;
-use walkdir::WalkDir;
+//! imgdiff — 重複・類似画像を検索する CLI。
+//! AI 駆動が主用途（tbm と同型の AI フレンドリ出力: auto JSON・{error,code}・stdout/stderr 分離）。
 
-/// 重複・類似画像を検索する
-#[derive(Parser, Debug)]
+use anyhow::Result;
+use clap::{Parser, Subcommand};
+
+mod compare;
+mod decode;
+mod error;
+mod output;
+mod pipeline;
+mod scan;
+mod util;
+
+use output::OutputFormat;
+
+#[derive(Parser)]
 #[command(name = "imgdiff", version, about = "重複・類似画像を検索する")]
 struct Cli {
-    /// スキャン対象のフォルダ
-    folder: PathBuf,
-
-    /// 厳密度: exact(SHA 完全一致) | pixel(ピクセル一致) | perceptual(知覚的に類似)
-    #[arg(long, value_enum, default_value_t = Strict::Perceptual)]
-    strict: Strict,
-
-    /// ハミング距離のしきい値（perceptual のみ有効。0 = 指紋一致、大きいほど緩い）
-    #[arg(long, default_value_t = 10)]
-    threshold: u32,
-
-    /// サブディレクトリを再帰的に探索する
-    #[arg(long, default_value_t = true)]
-    recurse: bool,
-
-    /// カンマ区切りの拡張子
-    #[arg(long, default_value = "jpg,jpeg,png,webp,gif,bmp,tiff")]
-    ext: String,
-
-    /// JSON レポートを出力する
-    #[arg(long)]
-    json: Option<PathBuf>,
-
-    /// 自己完結型の HTML レポートを出力する（web のレンダリングを再利用）
-    #[arg(long)]
-    html: Option<PathBuf>,
+    /// 出力形式（env: IMGDIFF_OUTPUT）。auto=端末は text・パイプ/捕捉は json（AI 向け）
+    #[arg(
+        long,
+        short = 'o',
+        global = true,
+        default_value = "auto",
+        env = "IMGDIFF_OUTPUT"
+    )]
+    output: OutputFormat,
+    #[command(subcommand)]
+    command: Cmd,
 }
 
-#[derive(Copy, Clone, Debug, ValueEnum)]
-enum Strict {
-    /// バイト単位。デコード不要
-    Exact,
-    /// デコード後のピクセルが一致（EXIF / 再エンコードを無視）
-    Pixel,
-    /// 知覚ハッシュ + ハミング距離
-    Perceptual,
+#[derive(Subcommand)]
+enum Cmd {
+    /// フォルダを走査して重複/類似画像をグループ化する
+    Scan(scan::ScanArgs),
+    /// 2 枚の画像を直接比較する（並べて + ピクセル diff + SSIM）
+    Compare(compare::CompareArgs),
 }
 
 fn main() {
     let cli = Cli::parse();
-    let exts: Vec<String> = cli.ext.split(',').map(|s| s.trim().to_lowercase()).collect();
-    let max_depth = if cli.recurse { usize::MAX } else { 1 };
+    let out = cli.output.resolve();
+    let json = out.is_json();
 
-    let images: Vec<PathBuf> = WalkDir::new(&cli.folder)
-        .max_depth(max_depth)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .map(|e| e.into_path())
-        .filter(|p| {
-            p.extension()
-                .and_then(|x| x.to_str())
-                .map(|x| exts.contains(&x.to_lowercase()))
-                .unwrap_or(false)
-        })
-        .collect();
+    let result = run(cli.command, out);
 
-    println!(
-        "スキャン {:?} | 厳密度 {:?} | しきい値 {} | 画像 {} 件",
-        cli.folder,
-        cli.strict,
-        cli.threshold,
-        images.len()
-    );
+    // json モードのエラーは {error,code} を stdout に出して非零終了（機械分岐用）。
+    // text モードは "Error: …" を stderr に出して非零終了。
+    if let Err(e) = result {
+        if json {
+            let code = e
+                .downcast_ref::<error::CliError>()
+                .map(|c| c.code)
+                .unwrap_or("error");
+            let envelope = serde_json::json!({ "error": format!("{e:#}"), "code": code });
+            println!("{envelope}");
+        } else {
+            eprintln!("Error: {e:#}");
+        }
+        std::process::exit(1);
+    }
+}
 
-    // TODO パイプライン:
-    //   rayon で並列化 → 画像ごとに SHA + shrink-on-load で縮小デコード + image_hasher で知覚ハッシュ
-    //   → 厳密度に従ってクラスタリング（SHA でグループ化 / ハミング距離で union-find）
-    //   → ターミナル表 / --json / --html レポートを出力
+fn run(command: Cmd, out: OutputFormat) -> Result<()> {
+    decode::init()?; // libvips 初期化（失敗時はここでエラー）
+    match command {
+        Cmd::Scan(args) => scan::run(args, out),
+        Cmd::Compare(args) => compare::run(args, out),
+    }
 }
