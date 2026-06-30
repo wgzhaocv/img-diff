@@ -4,6 +4,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
+mod cache;
 mod compare;
 mod decode;
 mod error;

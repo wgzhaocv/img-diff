@@ -2,7 +2,7 @@
 
 use crate::error::CliError;
 use crate::output::{self, OutputFormat};
-use crate::{decode, pipeline, util};
+use crate::{cache, decode, pipeline, util};
 use anyhow::Result;
 use clap::{Args, ValueEnum};
 use imgdiff_core::report::{
@@ -44,6 +44,12 @@ pub struct ScanArgs {
     /// HTML レポート（未対応）
     #[arg(long)]
     html: Option<PathBuf>,
+    /// キャッシュを使わない（毎回デコードする）
+    #[arg(long)]
+    no_cache: bool,
+    /// キャッシュ DB のディレクトリ（既定: OS キャッシュ/imgdiff）
+    #[arg(long)]
+    cache_dir: Option<PathBuf>,
 }
 
 #[derive(Copy, Clone, ValueEnum)]
@@ -73,6 +79,22 @@ struct Hashed {
     sha256: String,
     dhash: u64,
     rgba_sha256: String,
+}
+
+impl Hashed {
+    /// cache::Entry（ヒット時 or ミスで作った新規）から Hashed を組む。ヒット/ミス両パス共通。
+    fn from_entry(path: String, e: &cache::Entry) -> Hashed {
+        Hashed {
+            path,
+            bytes: e.size,
+            width: e.width,
+            height: e.height,
+            format: e.format.clone(),
+            sha256: e.sha256.clone(),
+            dhash: e.dhash,
+            rgba_sha256: e.rgba_sha256.clone(),
+        }
+    }
 }
 
 /// stdout 既定の要約（images[] を含まない）。AI のトークン節約用。
@@ -135,19 +157,48 @@ pub fn run(args: ScanArgs, out: OutputFormat) -> Result<()> {
         pb
     };
 
-    // ファイル単位に並列でデコード+ハッシュ。成功/失敗を 1 パスで振り分ける。
-    let (hashed, mut skipped): (Vec<Hashed>, Vec<SkippedFile>) = files
+    // キャッシュを開く（失敗時は警告して無効化＝デコードにフォールバック）。
+    let cache = if args.no_cache {
+        None
+    } else {
+        let dir = args.cache_dir.clone().unwrap_or_else(default_cache_dir);
+        match cache::Cache::open(&dir.join("cache.redb")) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                eprintln!("note: キャッシュを無効化します（{e:#}）");
+                None
+            }
+        }
+    };
+    let cache_ref = cache.as_ref();
+
+    // ファイル単位に並列でデコード+ハッシュ（キャッシュ命中はデコードを省く）。成功/失敗を 1 パスで振り分ける。
+    let (results, mut skipped): (
+        Vec<(Hashed, Option<(String, cache::Entry)>)>,
+        Vec<SkippedFile>,
+    ) = files
         .par_iter()
         .map(|path| {
-            let r = hash_one(path, root);
+            let r = hash_one(path, root, cache_ref, HASH_ALGO_VERSION);
             pb.inc(1);
             r
         })
         .partition_map(|r| match r {
-            Ok(h) => Either::Left(h),
+            Ok(x) => Either::Left(x),
             Err(s) => Either::Right(s),
         });
     pb.finish_and_clear();
+
+    // ミス分の新エントリを 1 トランザクションでキャッシュへ書く（失敗は警告のみ）。
+    if let Some(c) = cache_ref {
+        let fresh: Vec<(String, cache::Entry)> =
+            results.iter().filter_map(|(_, e)| e.clone()).collect();
+        if let Err(e) = c.write_all(&fresh) {
+            eprintln!("note: キャッシュ書き込みに失敗（{e:#}）");
+        }
+    }
+    let hashed: Vec<Hashed> = results.into_iter().map(|(h, _)| h).collect();
+
     // 出力の決定性（SPEC §4）: skippedFiles は path 昇順。
     skipped.sort_by(|a, b| a.path.cmp(&b.path));
 
@@ -237,27 +288,66 @@ pub fn run(args: ScanArgs, out: OutputFormat) -> Result<()> {
     Ok(())
 }
 
-/// 1 枚をデコード+ハッシュする。失敗時は理由付きの SkippedFile。
-/// 共通処理は `pipeline::decode_and_hash`。ここは相対パスとエラー振り分けだけを担う
-/// （d.rgba は scan では不要なので破棄される）。
-fn hash_one(path: &Path, root: &Path) -> std::result::Result<Hashed, SkippedFile> {
+/// 1 枚を（キャッシュ命中なら省略して）デコード+ハッシュする。失敗時は理由付きの SkippedFile。
+/// 戻り値の 2 番目はキャッシュへ書く新エントリ（ヒット時は None）。
+fn hash_one(
+    path: &Path,
+    root: &Path,
+    cache: Option<&cache::Cache>,
+    hash_algo: &str,
+) -> std::result::Result<(Hashed, Option<(String, cache::Entry)>), SkippedFile> {
     let rel = rel_path(path, root);
-    match pipeline::decode_and_hash(path) {
-        Ok(d) => Ok(Hashed {
-            path: rel,
-            bytes: d.bytes,
+    let inner = || -> Result<(Hashed, Option<(String, cache::Entry)>)> {
+        let meta = std::fs::metadata(path)?;
+        let size = meta.len();
+        let mtime_ns = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_nanos() as u64);
+        // 絶対パスをキャッシュキーにする（cwd や指定方法に依らず安定）。
+        let key = path
+            .canonicalize()
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy()
+            .into_owned();
+
+        // キャッシュ照合（mtime が取れたときのみ）。命中ならデコードを省く。
+        if let (Some(c), Some(mt)) = (cache, mtime_ns) {
+            if let Some(e) = c.get(&key, size, mt, hash_algo) {
+                return Ok((Hashed::from_entry(rel.clone(), e), None));
+            }
+        }
+
+        // ミス → デコード+ハッシュ（d.rgba は scan では不要なので破棄）。
+        let d = pipeline::decode_and_hash(path)?;
+        let entry = cache::Entry {
+            size,
+            mtime_ns: mtime_ns.unwrap_or(0),
+            hash_algo: hash_algo.to_string(),
+            sha256: d.sha256,
+            rgba_sha256: d.rgba_sha256,
+            dhash: d.dhash,
             width: d.width,
             height: d.height,
             format: d.format,
-            sha256: d.sha256,
-            dhash: d.dhash,
-            rgba_sha256: d.rgba_sha256,
-        }),
-        Err(e) => Err(SkippedFile {
-            path: rel,
-            reason: format!("{e:#}"),
-        }),
-    }
+        };
+        let hashed = Hashed::from_entry(rel.clone(), &entry);
+        // mtime が取れたときだけキャッシュへ書く（取れない時はキャッシュしない）。
+        let new = mtime_ns.map(|_| (key, entry));
+        Ok((hashed, new))
+    };
+    inner().map_err(|e| SkippedFile {
+        path: rel,
+        reason: format!("{e:#}"),
+    })
+}
+
+/// 既定のキャッシュディレクトリ（OS キャッシュ/imgdiff、取得不可なら ./.imgdiff）。
+fn default_cache_dir() -> PathBuf {
+    dirs::cache_dir()
+        .map(|d| d.join("imgdiff"))
+        .unwrap_or_else(|| PathBuf::from(".imgdiff"))
 }
 
 /// 走査ルートからの相対パスを '/' 区切りで返す（SPEC §4）。
