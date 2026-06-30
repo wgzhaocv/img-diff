@@ -23,7 +23,15 @@ pub fn pixel_diff_ratio(a: &[u8], b: &[u8], tolerance: u8) -> f64 {
 }
 
 /// グレースケール（1 byte/px、行優先、len = w*h）の矩形領域の SSIM を計算する内部関数。
-fn ssim_window(a: &[u8], b: &[u8], stride: usize, x0: usize, y0: usize, ww: usize, wh: usize) -> f64 {
+fn ssim_window(
+    a: &[u8],
+    b: &[u8],
+    stride: usize,
+    x0: usize,
+    y0: usize,
+    ww: usize,
+    wh: usize,
+) -> f64 {
     let (mut sx, mut sy, mut sxx, mut syy, mut sxy) = (0.0f64, 0.0, 0.0, 0.0, 0.0);
     for dy in 0..wh {
         let row = (y0 + dy) * stride;

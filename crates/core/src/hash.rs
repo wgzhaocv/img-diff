@@ -99,7 +99,13 @@ mod tests {
 
     #[test]
     fn hex_roundtrip() {
-        for h in [0u64, 1, 0x8000_0000_0000_0000, u64::MAX, 0x0123_4567_89ab_cdef] {
+        for h in [
+            0u64,
+            1,
+            0x8000_0000_0000_0000,
+            u64::MAX,
+            0x0123_4567_89ab_cdef,
+        ] {
             assert_eq!(to_hex(h).len(), 16);
             assert_eq!(from_hex(&to_hex(h)), Some(h));
         }
