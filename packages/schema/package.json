@@ -1,0 +1,24 @@
+{
+  "name": "schema",
+  "version": "0.0.0",
+  "description": "img-diff の web/CLI 共有スキーマ（型定義 + ハッシュ仕様）",
+  "license": "MIT",
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "dev": "vp pack --watch",
+    "test": "vp test",
+    "check": "vp check"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "vite-plus": "catalog:"
+  }
+}

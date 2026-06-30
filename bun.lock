@@ -17,6 +17,14 @@
         "vite-plus": "catalog:",
       },
     },
+    "packages/schema": {
+      "name": "schema",
+      "version": "0.0.0",
+      "devDependencies": {
+        "typescript": "^6.0.3",
+        "vite-plus": "catalog:",
+      },
+    },
     "packages/utils": {
       "name": "utils",
       "version": "0.0.0",
@@ -314,6 +322,8 @@
     "quansync": ["quansync@1.0.0", "", {}, "sha512-5xZacEEufv3HSTPQuchrvV6soaiACMFnq1H8wkVioctoH3TRha9Sz66lOxRwPK/qZj7HPiSveih9yAyh98gvqA=="],
 
     "react-is": ["react-is@17.0.2", "", {}, "sha512-w2GsyukL62IJnlaff/nRegPQR94C/XXamvMWmSHRJ4y7Ts/4ocGRmTHvOs8PSE6pB3dWOrD/nueuU5sduBsQ4w=="],
+
+    "schema": ["schema@workspace:packages/schema"],
 
     "semver": ["semver@7.8.5", "", { "bin": { "semver": "bin/semver.js" } }, "sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA=="],
 

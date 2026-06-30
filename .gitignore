@@ -36,3 +36,6 @@ crates/**/target
 
 # codegraph のローカルインデックス（マシン固有なのでコミットしない）
 .codegraph/
+
+# サードパーティの参考コード（学習用。製品ではないのでコミットしない）
+/reference

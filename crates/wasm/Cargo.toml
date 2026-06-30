@@ -1,0 +1,12 @@
+[package]
+name = "imgdiff-wasm"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+# web 向けに WebAssembly として公開する。実装時に wasm-bindgen を追加する。
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+imgdiff-core = { path = "../core" }
