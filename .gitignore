@@ -29,3 +29,10 @@ dist-ssr
 !.vscode/
 !.vscode/settings.json
 !.vscode/extensions.json
+
+# Rust
+/target
+crates/**/target
+
+# codegraph のローカルインデックス（マシン固有なのでコミットしない）
+.codegraph/

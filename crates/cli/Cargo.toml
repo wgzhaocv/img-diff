@@ -1,0 +1,20 @@
+[package]
+name = "imgdiff"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "imgdiff"
+path = "src/main.rs"
+
+[dependencies]
+image.workspace = true
+image_hasher.workspace = true
+rayon.workspace = true
+walkdir.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+indicatif.workspace = true

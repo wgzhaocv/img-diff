@@ -1,0 +1,29 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "MIT"
+
+# フル静的・純 Rust デコード（libvips をリンクしない）。クロスコンパイルの依存がなく、バイナリも小さい
+# —— reference/czkawka と同じスタック
+[workspace.dependencies]
+image = { version = "0.25", default-features = false, features = [
+  "jpeg",
+  "png",
+  "webp",
+  "gif",
+  "bmp",
+  "tiff",
+] }
+image_hasher = { version = "3.0", features = ["fast_resize_unstable"] }
+fast_image_resize = "6"
+rayon = "1.10"
+walkdir = "2.5"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+indicatif = "0.17"
