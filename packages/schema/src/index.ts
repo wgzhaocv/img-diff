@@ -62,7 +62,11 @@ export interface ImageRecord {
   format: string;
   /** ファイル内容の SHA-256（小文字16進64文字） */
   sha256: string;
-  /** デコード後ピクセルの SHA-256。未計算/デコード失敗時は null（pixel 厳密度に使用） */
+  /**
+   * デコード後ピクセルの SHA-256（pixel 厳密度に使用）。
+   * dHash が他と完全一致する候補のみ算出する（SPEC.md §2.1 剪定）。
+   * 候補でない / デコード失敗時は null。
+   */
   pixelSha256: string | null;
   /** 知覚ハッシュ dHash（16進16文字）。デコード失敗時は null */
   phash: string | null;
