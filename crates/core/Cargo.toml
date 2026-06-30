@@ -5,5 +5,8 @@ version.workspace = true
 license.workspace = true
 
 [dependencies]
+# 9x8 リサイズ（SPEC §1 step5）に imageops::resize(Triangle=linear) のみ使う。
+# default-features=off でコーデックを除外し、wasm を軽く保つ。
+image = { version = "0.25", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 sha2 = "0.11.0"
