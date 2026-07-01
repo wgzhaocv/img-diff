@@ -13,6 +13,7 @@ mod index;
 mod output;
 mod pipeline;
 mod scan;
+mod skill;
 mod util;
 
 use output::OutputFormat;
@@ -41,12 +42,20 @@ enum Cmd {
     Compare(compare::CompareArgs),
     /// 重複画像を安全に削除する（既定 dry-run・--apply でゴミ箱へ）
     Clean(clean::CleanArgs),
+    /// AI 手册（skill）を Claude / Codex に書き出す・表示する（通常は起動時に自動投影）
+    Skill(skill::SkillArgs),
 }
 
 fn main() {
     let cli = Cli::parse();
     let out = cli.output.resolve();
     let json = out.is_json();
+
+    // AI 手册（skill）を毎起動で self-heal（best-effort・沈黙）。libvips 初期化前に行い vips 不在でも
+    // 投影を保つ。skill サブコマンド自身は明示操作なので除く（uninstall 直前に再投影しない）。
+    if !matches!(cli.command, Cmd::Skill(_)) {
+        let _ = skill::ensure_fresh();
+    }
 
     let result = run(cli.command, out);
 
@@ -68,10 +77,20 @@ fn main() {
 }
 
 fn run(command: Cmd, out: OutputFormat) -> Result<()> {
-    decode::init()?; // libvips 初期化（失敗時はここでエラー）
+    // 画像系は libvips を初期化してから（失敗時はここでエラー）。skill は libvips 不要なので初期化しない。
     match command {
-        Cmd::Scan(args) => scan::run(args, out),
-        Cmd::Compare(args) => compare::run(args, out),
-        Cmd::Clean(args) => clean::run(args, out),
+        Cmd::Scan(args) => {
+            decode::init()?;
+            scan::run(args, out)
+        }
+        Cmd::Compare(args) => {
+            decode::init()?;
+            compare::run(args, out)
+        }
+        Cmd::Clean(args) => {
+            decode::init()?;
+            clean::run(args, out)
+        }
+        Cmd::Skill(args) => skill::run(args, out),
     }
 }
