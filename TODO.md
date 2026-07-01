@@ -11,21 +11,19 @@
 - **clean（重複削除）** — `crates/cli/src/clean.rs`。auto_deletable（exact/pixel）の keeper 以外のみを**ゴミ箱**へ（`trash` crate）。既定 dry-run・`--apply` で実行・perceptual は対象外。`CleanReport`（SPEC §5.1）。
 - **スキャンエラー記録** — `WalkDir` のエントリエラー（権限拒否等）を握り潰さず `skippedFiles` に記録（scan/clean 共通）。
 - **AI 手册 skill** — `crates/cli/skill/imgdiff-cli.md` を `include_str!` で内嵌、Claude skill + Codex AGENTS.md へ投影、戳ハッシュで self-heal（毎起動自動投影・1h クールダウン）。`imgdiff skill install/print/where/uninstall`。tbm の `skill.rs` 方式を借用（[[distribution-model-borrow-tbm]]）。
+- **HEIC/HEIF/AVIF 対応** — libheif 導入で libvips が `vips-heif` モジュールを認識。既定 ext に heic/heif/avif 追加（scan/clean）。配布時は libheif + コーデック DLL も同梱要。
 - **性能** — release + キャッシュで実画像60枚 COLD ~2.3s → WARM ~90ms（debug 比 6.7x、再スキャン ~26x）。
 - **未着手** — web（`apps/website/`。`UI.md` + skill `imgdiff-ui` は用意済み）。
 
 ## 次の手（優先順）
 
-### 1. 小物
+### 1. 配布（distribution・tbm 方式を借用）— まず Windows から
 
-- HEIC/AVIF 対応（`pacman -S mingw-w64-x86_64-libheif`、libvips が自動認識）。
+- **Windows パッケージ**: imgdiff.exe + libvips ランタイム DLL（+ vips-heif/libheif 等コーデック）を同梱した zip。exe と同ディレクトリに DLL を置けば PATH 不要。**要検証: MSYS2 を PATH から外した素の環境で動くこと**。
+- 網版チェック（1h クールダウン・通知のみ）+ `imgdiff update`（`self-replace`）+ release manifest+sha256。ホストは **CF 静的**（version.json + アーカイブ + install ページ）。
+- **web の install ページで OS を選ばせ対応スクリプトを出す**。Linux/Mac は後日（Mac は Mac/CI）。
 
-### 2. 配布（distribution・tbm 方式を借用）
-
-- 網版チェック（1h クールダウン・通知のみ）+ `imgdiff update`（`self-replace`）+ release（per-target ビルド・manifest+sha256）。
-- **ホストは CF 静的**（version.json + アーカイブ + install ページを静的配信）。libvips 同梱が必須（Windows は DLL 同梱、Linux/Mac は要各 OS ビルド。Mac は Mac/CI）。
-
-### 3. web（CLI 完了後）
+### 2. web（CLI 完了後）
 
 - `crates/wasm`（wasm-bindgen）+ React UI。設計は `apps/website/DESIGN.md`、見た目は `apps/website/UI.md` + skill `imgdiff-ui`。
 - 着手時まず **native==wasm の dHash 一致**を検証（`image` の f32 リサイズが両端でビット一致するか）。

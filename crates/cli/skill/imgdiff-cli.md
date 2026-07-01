@@ -28,7 +28,7 @@
 imgdiff scan <FOLDER> [--strict exact|pixel|perceptual] [--threshold N] [--ext jpg,png,...] [--full] [--json <FILE>] [--no-cache]
 ```
 
-- 既定 `--strict perceptual`・`--threshold 10`・再帰あり・`--ext jpg,jpeg,png,webp,gif,bmp,tiff`。redb キャッシュで再スキャン高速化（`--no-cache` で無効）。
+- 既定 `--strict perceptual`・`--threshold 10`・再帰あり・`--ext jpg,jpeg,png,webp,gif,bmp,tiff,heic,heif,avif`。redb キャッシュで再スキャン高速化（`--no-cache` で無効）。
 - **stdout 既定は要約**（`groups[]` + `skippedFiles[]` + `stats` + `producer`、`images[]` は省く＝トークン節約）。完全版は `--full`（stdout）か `--json <file>`（ファイル）。
 - 主フィールド: `groups[].{id, strictness, members[], keeper, reclaimableBytes, autoDeletable, maxHamming}`、`stats.{scanned, skipped, groups, duplicates, reclaimableBytes, elapsedMs}`。
   `keeper` = 残す推奨（最大解像度 → 最大バイト → path 昇順）。`members`/`keeper`/`skippedFiles[].path` は**ルート相対（'/' 区切り）**。
@@ -65,5 +65,5 @@ imgdiff clean <FOLDER> [--strict exact|pixel] [--apply] [--ext ...]
 ## 注意
 
 - 終了コード 0=成功、非零=失敗（JSON 時は `{error,code}` が stdout）。分岐は `code` で行う。
-- HEIC/AVIF は未対応のことがある（libvips のビルド次第）。`decode_error` が出たら対応形式か確認。
+- HEIC/HEIF/AVIF は libvips に libheif がある構成で対応（既定 ext に含む）。libheif 無しの配布物では `decode_error`。JXL 等はまだ未対応。
 - 実行時に libvips ランタイムが要る。`decode_error`（libvips 初期化失敗）なら、同梱 DLL/ライブラリの配置か PATH を確認。

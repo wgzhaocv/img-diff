@@ -28,7 +28,7 @@ pub struct ScanArgs {
     #[arg(long, default_value_t = true)]
     recurse: bool,
     /// カンマ区切りの対象拡張子
-    #[arg(long, default_value = "jpg,jpeg,png,webp,gif,bmp,tiff")]
+    #[arg(long, default_value = "jpg,jpeg,png,webp,gif,bmp,tiff,heic,heif,avif")]
     ext: String,
     /// 完全な ScanReport(images[] 込み)を JSON ファイルへ書き出す
     #[arg(long)]
