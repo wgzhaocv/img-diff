@@ -152,6 +152,13 @@ unsafe fn step(
 
 /// ファイルを sRGB RGBA（straight alpha・uchar・4band）にデコードする。SPEC §1 手順 1〜3。
 pub fn decode_canonical(path: &Path) -> Result<Decoded> {
+    decode_scaled(path, 1.0)
+}
+
+/// `decode_canonical` の scale 指定版。SVG/PDF 等のベクタは `scale` で描画解像度を上げられる
+/// （素の読み込みより高精細。ラスタには効かない）。`scale=1.0` は無指定＝素の読み込みと同じ。
+/// render サブコマンド専用（scan/compare/find は decode_canonical=1.0 を使う）。
+pub fn decode_scaled(path: &Path, scale: f64) -> Result<Decoded> {
     let path_str = path
         .to_str()
         .ok_or_else(|| CliError::new("decode_error", "パスが UTF-8 ではありません"))?;
@@ -160,8 +167,12 @@ pub fn decode_canonical(path: &Path) -> Result<Decoded> {
     let null = std::ptr::null::<c_void>();
 
     unsafe {
-        // 1. ロード
-        let loaded = vips_image_new_from_file(cpath.as_ptr(), null);
+        // 1. ロード（ベクタは "scale" オプションで描画解像度を制御。1.0 は無指定と同じ扱い）。
+        let loaded = if (scale - 1.0).abs() > f64::EPSILON {
+            vips_image_new_from_file(cpath.as_ptr(), c"scale".as_ptr(), scale, null)
+        } else {
+            vips_image_new_from_file(cpath.as_ptr(), null)
+        };
         if loaded.is_null() {
             return Err(vips_error("load"));
         }

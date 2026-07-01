@@ -78,14 +78,14 @@ CLI は原生に、web は wasm にコンパイルして共有する。出力 JS
 
 ## 4. 出力（--json / レポート）
 
-最上位は `Report = ScanReport | CompareResult | CleanReport | FindReport`、
-`kind`（"scan" / "compare" / "clean" / "find"）で判別。
+最上位は `Report = ScanReport | CompareResult | CleanReport | FindReport | RenderReport`、
+`kind`（"scan" / "compare" / "clean" / "find" / "render"）で判別。
 全出力に `producer { app, appVersion, vips, hashAlgo }` を付与。
 
 - `ScanReport`: `images[]` + `groups[]` + `skippedFiles[]` + `stats`。
   **決定性のため `images[]` と `skippedFiles[]` は path 昇順**（`groups[]` は §5 の通り最小メンバ path 昇順）。
 - `CompareResult`: `a` / `b` の `ImageRecord` + 各種スコア + 任意の `diffImage`（§3）。比較不能時は §3 の通り null。
-- `CleanReport`: §5.1。`FindReport`: §5.2。
+- `CleanReport`: §5.1。`FindReport`: §5.2。`RenderReport`: §5.3。
 
 `ImageRecord.path` は scan ではルートからの相対パス（`/` 区切り）、compare では入力で与えたパス。
 `AssetRef` は `{kind:"path"}` か `{kind:"dataUri"}`（CLI はパス、web は data URI）。
@@ -136,6 +136,20 @@ CLI は原生に、web は wasm にコンパイルして共有する。出力 JS
 - 出力は `FindReport`（`kind:"find"`）: `query`（`ImageRecord`・path は入力で与えたパス）+ `threshold` +
   `matches[]`（`{path, bytes, width, height, format, tier, hammingDistance}`）+ `skippedFiles[]` + `stats{scanned, skipped, matched, elapsedMs}`。
 - find は非破壊（削除しない）。「似たものを消す」は scan → clean を使う。
+
+## 5.3 render（ベクタ→PNG 栅格化）
+
+SVG 等のベクタ画像を PNG に栅格化する補助ツール（imgdiff の本分＝重複検出とは別カテゴリ・非破壊）。
+libvips が §1 手順 1〜3 と同じ経路で描画し、透明（straight alpha）を保ったまま PNG を書き出す。
+
+- **入力**: `<PATH>`（SVG ファイル、またはそれを含むディレクトリ）。ディレクトリは `--ext`（既定 `svg`）に合う実ファイルを `--recurse`（既定）で収集。
+- **出力先**: 既定は各入力と同じ場所に拡張子 `.png` で書く（`foo.svg`→`foo.png`）。`--out-dir <DIR>` 指定時は入力ルートからの相対構造を保って `<DIR>` 配下へ。
+- **既存の扱い**: 出力先が既にあれば **skip**（`--overwrite` で上書き）。元ファイルは決して変更しない。
+- **`--scale N`**（既定 1.0）: ベクタを何倍の解像度で描くか。SVG は宣言サイズが小さい（アイコン等）ことが多いため、
+  ラスタ拡大でなく **libvips の `scale` で高精細に再描画**する（scale=2 なら 200×200 の SVG → 400×400 PNG）。ラスタ入力には効かない。
+- 出力は `RenderReport`（`kind:"render"`）: `scale` + `items[].{src, dst, width, height, bytes, status, error?}` + `stats{scanned, rendered, skipped, failed, elapsedMs}`。
+  `status` は `rendered` / `skipped` / `failed`。1 件の失敗で全体は止めず per-file に記録。`items` は `src` 昇順（決定性・§4）。
+- **注意**: 重複検出/比較目的なら render は不要（scan/compare/find は `.svg` を直接扱える）。render は PNG そのものが欲しいとき用。
 
 ## 6. バージョニング / 再現性
 

@@ -249,5 +249,48 @@ export interface FindReport {
   stats: FindStats;
 }
 
-/** scan / compare / clean / find をまとめた最上位型（--json / レポート） */
-export type Report = ScanReport | CompareResult | CleanReport | FindReport;
+/** render の 1 件の結果の状態 */
+export type RenderStatus = "rendered" | "skipped" | "failed";
+
+/** render の 1 件（1 入力 → 1 出力）。src/dst は入力の与え方に従う実パス */
+export interface RenderItem {
+  src: string;
+  dst: string;
+  /** 出力 PNG の幅・高さ（scale 適用後）。失敗時は 0 */
+  width: number;
+  height: number;
+  /** 出力 PNG のバイト数。rendered 以外は 0 */
+  bytes: number;
+  status: RenderStatus;
+  /** failed のときのみ理由 */
+  error?: string;
+}
+
+export interface RenderStats {
+  scanned: number;
+  rendered: number;
+  skipped: number;
+  failed: number;
+  elapsedMs: number;
+}
+
+/**
+ * render（ベクタ→PNG 栅格化）の結果（SPEC.md §5.3）。
+ * imgdiff の本分（重複検出）とは別の補助ツール。非破壊。
+ */
+export interface RenderReport {
+  schemaVersion: typeof SCHEMA_VERSION;
+  kind: "render";
+  producer: Producer;
+  /** 入力ルート（ディレクトリ or 単一ファイル） */
+  root: string;
+  createdAt: string;
+  /** 描画スケール（既定 1.0） */
+  scale: number;
+  /** items は src の昇順（決定性・SPEC §4） */
+  items: RenderItem[];
+  stats: RenderStats;
+}
+
+/** scan / compare / clean / find / render をまとめた最上位型（--json / レポート） */
+export type Report = ScanReport | CompareResult | CleanReport | FindReport | RenderReport;

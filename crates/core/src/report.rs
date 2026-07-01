@@ -255,6 +255,63 @@ pub struct FindReport {
     pub stats: FindStats,
 }
 
+/// render（SVG→PNG 栅格化）の 1 件の結果の状態。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RenderStatus {
+    /// PNG を書き出した。
+    Rendered,
+    /// 出力先が既に存在し --overwrite 無しのため飛ばした。
+    Skipped,
+    /// デコード/書き込みに失敗（error に理由）。
+    Failed,
+}
+
+/// render の 1 件（1 入力 → 1 出力）。path は入力ルートからの相対（'/' 区切り）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderItem {
+    /// 入力（SVG 等）のパス。
+    pub src: String,
+    /// 出力 PNG のパス。
+    pub dst: String,
+    /// 出力 PNG の幅・高さ（scale 適用後）。失敗時は 0。
+    pub width: u32,
+    pub height: u32,
+    /// 出力 PNG のバイト数。rendered 以外は 0。
+    pub bytes: u64,
+    pub status: RenderStatus,
+    /// failed のときのみ理由。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderStats {
+    pub scanned: u32,
+    pub rendered: u32,
+    pub skipped: u32,
+    pub failed: u32,
+    pub elapsed_ms: u64,
+}
+
+/// render（ベクタ→PNG 栅格化）の結果。SPEC.md §5.3。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderReport {
+    pub schema_version: u32,
+    pub producer: Producer,
+    /// 入力ルート（ディレクトリ or 単一ファイル）。
+    pub root: String,
+    pub created_at: String,
+    /// 描画スケール（既定 1.0）。
+    pub scale: f64,
+    /// items は src の path 昇順（決定性・SPEC §4）。
+    pub items: Vec<RenderItem>,
+    pub stats: RenderStats,
+}
+
 /// 最上位（kind で判別）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
@@ -263,4 +320,5 @@ pub enum Report {
     Compare(CompareResult),
     Clean(CleanReport),
     Find(FindReport),
+    Render(RenderReport),
 }

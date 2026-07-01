@@ -13,6 +13,7 @@ mod find;
 mod index;
 mod output;
 mod pipeline;
+mod render;
 mod scan;
 mod skill;
 mod update;
@@ -45,6 +46,8 @@ enum Cmd {
     Compare(compare::CompareArgs),
     /// 1 枚の画像に似たものをフォルダ内で探し、層別（exact/pixel/perceptual）に列挙する
     Find(find::FindArgs),
+    /// SVG(ベクタ)を PNG に栅格化する（フォルダ一括・--scale で高精細・--out-dir で別保存）
+    Render(render::RenderArgs),
     /// 重複画像を安全に削除する（既定 dry-run・--apply でゴミ箱へ）
     Clean(clean::CleanArgs),
     /// AI 手册（skill）を stdout に出す（常設導入は skills.sh: npx skills add）
@@ -63,7 +66,7 @@ fn main() {
     let notify_update = !json
         && matches!(
             cli.command,
-            Cmd::Scan(_) | Cmd::Compare(_) | Cmd::Find(_) | Cmd::Clean(_)
+            Cmd::Scan(_) | Cmd::Compare(_) | Cmd::Find(_) | Cmd::Render(_) | Cmd::Clean(_)
         );
 
     let result = run(cli.command, out);
@@ -103,6 +106,10 @@ fn run(command: Cmd, out: OutputFormat) -> Result<()> {
         Cmd::Find(args) => {
             decode::init()?;
             find::run(args, out)
+        }
+        Cmd::Render(args) => {
+            decode::init()?;
+            render::run(args, out)
         }
         Cmd::Clean(args) => {
             decode::init()?;

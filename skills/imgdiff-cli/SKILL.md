@@ -1,13 +1,13 @@
 ---
 name: imgdiff-cli
-description: imgdiff CLI（重複/類似画像の検出 scan・2枚比較 compare・1枚に似た画像をフォルダ内で探す find・重複削除 clean）を AI が駆動するための操作手册。auto JSON 出力・{error,code}・厳密度(exact/pixel/perceptual)・安全な削除フロー（dry-run 既定・ゴミ箱）。imgdiff を使う/呼ぶときに従う。
+description: imgdiff CLI（重複/類似画像の検出 scan・2枚比較 compare・1枚に似た画像をフォルダ内で探す find・SVG→PNG 栅格化 render・重複削除 clean）を AI が駆動するための操作手册。auto JSON 出力・{error,code}・厳密度(exact/pixel/perceptual)・安全な削除フロー（dry-run 既定・ゴミ箱）。imgdiff を使う/呼ぶときに従う。
 allowed-tools: Bash(imgdiff:*)
 ---
 
 # imgdiff CLI 操作手册（AI 向け）
 
 重複・類似画像を扱う CLI `imgdiff`。**AI 駆動が主用途**（tbm と同型: auto JSON 出力・`{error,code}`・非対話・stdout=データ/stderr=進捗）。
-サブコマンドは 4 つ: **scan**（フォルダ内の重複/類似をグループ化）・**compare**（2 枚を直接比較）・**find**（1 枚に似た画像をフォルダ内で探す）・**clean**（重複を安全に削除）。
+サブコマンドは 5 つ: **scan**（フォルダ内の重複/類似をグループ化）・**compare**（2 枚を直接比較）・**find**（1 枚に似た画像をフォルダ内で探す）・**render**（SVG→PNG 栅格化）・**clean**（重複を安全に削除）。
 
 ## 出力の約束（重要）
 
@@ -16,7 +16,7 @@ allowed-tools: Bash(imgdiff:*)
 - **成功**: 裸の JSON DTO を stdout（pretty・信封なし・フィールド安定）。**進捗/警告は stderr**。
 - **失敗**: stdout に `{"error": "...", "code": "..."}` を出して**非零終了**。`code` は機械分岐用:
   `not_found`（読み込み失敗）/ `decode_error`（デコード失敗・libvips 未検出等）/ `io_error`（書き込み失敗）/ `unsupported`（未対応）/ `error`（その他）。
-- 最上位 JSON は `kind` で判別: `"scan"` / `"compare"` / `"find"` / `"clean"`。全出力に `producer {app, appVersion, vips, hashAlgo}`。
+- 最上位 JSON は `kind` で判別: `"scan"` / `"compare"` / `"find"` / `"render"` / `"clean"`。全出力に `producer {app, appVersion, vips, hashAlgo}`。
 
 ## 厳密度（strictness）
 
@@ -63,6 +63,18 @@ imgdiff find <QUERY> <FOLDER> [--threshold N] [--ext ...] [--top N] [--no-cache]
 - 主フィールド: `query`(ImageRecord)、`threshold`、`matches[].{path, bytes, width, height, format, tier, hammingDistance}`、`stats.{scanned, skipped, matched, elapsedMs}`。`path` はルート相対（'/' 区切り）。
 - 非破壊（削除しない）。「似たものを消す」は scan → clean。
 
+## render — SVG(ベクタ)を PNG に栅格化（補助ツール・非破壊）
+
+```
+imgdiff render <PATH> [--out-dir <DIR>] [--scale N] [--ext svg,...] [--overwrite]
+```
+
+- `<PATH>` は SVG ファイル or それを含むディレクトリ。libvips で描画し**透明保持**のまま PNG を書き出す。
+- 出力先: 既定は各入力と同じ場所（`foo.svg`→`foo.png`）。`--out-dir` 指定で相対構造を保って別保存。既存は **skip**（`--overwrite` で上書き）。元ファイルは触らない。
+- **`--scale N`**（既定 1.0）: ベクタを N 倍解像度で**再描画**（ラスタ拡大でなく高精細。SVG アイコンは宣言サイズが小さいので有用）。例: scale=2 で 200×200 → 400×400。
+- 主フィールド: `scale`、`items[].{src, dst, width, height, bytes, status:"rendered"|"skipped"|"failed", error?}`、`stats.{scanned, rendered, skipped, failed, elapsedMs}`。1 件失敗しても止めず per-file 記録。
+- **注意**: 重複検出/比較なら render は不要（scan/compare/find は `.svg` を直接扱える）。**PNG そのものが欲しいとき**用。
+
 ## clean — 重複を安全に削除（破壊的・既定は安全側）
 
 ```
@@ -80,7 +92,8 @@ imgdiff clean <FOLDER> [--strict exact|pixel] [--apply] [--ext ...]
 1. **重複を消す**: `imgdiff scan <dir> --strict pixel` で groups 確認 → `imgdiff clean <dir> --strict pixel`（dry-run で予定確認）→ 問題なければ `--apply`。
 2. **2 枚がどう違うか**: `imgdiff compare a.png b.png --diff diff.png` → スコア + どこが違うかの PNG。
 3. **この 1 枚に似た画像を探す**: `imgdiff find query.jpg <dir>` → 層別（exact/pixel/perceptual）に一致を列挙。厳密に絞るなら `--threshold 6`、広げるなら `--threshold 14`。
-4. 大量の完全レポートが要るとき: `imgdiff scan <dir> --json report.json`。
+4. **SVG を PNG にしたい**: `imgdiff render <dir> --out-dir out --scale 2` → フォルダ内 SVG を 2倍解像度の PNG に一括変換（重複検出には不要・PNG が欲しいとき用）。
+5. 大量の完全レポートが要るとき: `imgdiff scan <dir> --json report.json`。
 
 ## 注意
 
