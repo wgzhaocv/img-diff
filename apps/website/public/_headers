@@ -1,0 +1,6 @@
+# wasm-vips が SharedArrayBuffer を使うため、全ページを cross-origin isolated にする。
+# この 2 ヘッダが揃うとブラウザが crossOriginIsolated=true にし SharedArrayBuffer が有効化される。
+# Cloudflare Workers Static Assets はこの _headers を dist 直下から読む（Worker コード不要）。
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp

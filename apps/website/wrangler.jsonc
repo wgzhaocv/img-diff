@@ -1,0 +1,13 @@
+{
+  // img-diff web フロント。サーバ側計算なしの静的配信（Workers Static Assets・Worker スクリプト無し）。
+  // 純クライアント（wasm-vips）。COOP/COEP は public/_headers（→ dist 直下にコピー）で付与し
+  // cross-origin isolation を有効化する。
+  "name": "img-diff-web",
+  "compatibility_date": "2025-06-01",
+  "assets": {
+    // vp build（Vite）の出力先。public/* もここへコピーされる（_headers 含む）。
+    "directory": "./dist",
+    // 純クライアントアプリなので、未知パスは index.html を返す（SPA）。
+    "not_found_handling": "single-page-application",
+  },
+}
