@@ -33,7 +33,8 @@
 ### 2. web（`crates/wasm` + parity は完了。次は React UI）
 
 - **Phase 0 完了**: `crates/wasm`（wasm-bindgen）+ native==wasm parity 検証（上記「完成済み」参照）。
-- **Phase 1 完了（未 commit）**: React 化 + UI 骨格。**shadcn/ui + Tailwind v4** を土台に、`src/index.css` で
+- **Phase 1 完了（commit 済 7fc1b54）**: React 化 + UI 骨格。4 エージェントレビュー反映済み。
+  **shadcn/ui + Tailwind v4** を土台に、`src/index.css` で
   UI.md トークンを shadcn の意味変数へ写像（Teal・WCAG AAA・反AI・亮/暗）。scan / compare / install の
   シェル + ハッシュルータ + テーマトグル。`vp dev`（localhost:5173）で実機確認済（亮/暗・3画面・コンソール綺麗）。
   型/lint/整形（`vp check`）緑。UI スタックの約束は記憶 [[web-ui-stack-shadcn-tailwind]] 参照。
