@@ -1,23 +1,18 @@
 //! scan サブコマンド: フォルダを走査して重複/類似画像をグループ化する（SPEC §2,§5）。
+//! 索引処理（走査+デコード+ハッシュ+clustering）は clean と共有するため `index` モジュールへ。
 
 use crate::error::CliError;
+use crate::index::{self, IndexOptions};
 use crate::output::{self, OutputFormat};
-use crate::{cache, decode, pipeline, util};
+use crate::util;
 use anyhow::Result;
 use clap::{Args, ValueEnum};
 use imgdiff_core::report::{
-    DupGroup, ImageRecord, Producer, Report, ScanReport, ScanStats, SkippedFile, Strictness,
-    HASH_ALGO_VERSION, SCHEMA_VERSION,
+    DupGroup, Producer, Report, ScanReport, ScanStats, SkippedFile, Strictness, SCHEMA_VERSION,
 };
-use imgdiff_core::{cluster, hash};
-use indicatif::{ProgressBar, ProgressStyle};
-use rayon::iter::Either;
-use rayon::prelude::*;
 use serde::Serialize;
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Instant;
-use walkdir::WalkDir;
 
 #[derive(Args)]
 pub struct ScanArgs {
@@ -69,34 +64,6 @@ impl Strict {
     }
 }
 
-/// デコード+ハッシュの中間結果（pixelSha256 剪定の前）。
-struct Hashed {
-    path: String,
-    bytes: u64,
-    width: u32,
-    height: u32,
-    format: String,
-    sha256: String,
-    dhash: u64,
-    rgba_sha256: String,
-}
-
-impl Hashed {
-    /// cache::Entry（ヒット時 or ミスで作った新規）から Hashed を組む。ヒット/ミス両パス共通。
-    fn from_entry(path: String, e: &cache::Entry) -> Hashed {
-        Hashed {
-            path,
-            bytes: e.size,
-            width: e.width,
-            height: e.height,
-            format: e.format.clone(),
-            sha256: e.sha256.clone(),
-            dhash: e.dhash,
-            rgba_sha256: e.rgba_sha256.clone(),
-        }
-    }
-}
-
 /// stdout 既定の要約（images[] を含まない）。AI のトークン節約用。
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -123,109 +90,23 @@ pub fn run(args: ScanArgs, out: OutputFormat) -> Result<()> {
     }
     let started = Instant::now();
     let strictness = args.strict.to_core();
-    let exts: Vec<String> = args
-        .ext
-        .split(',')
-        .map(|s| s.trim().to_lowercase())
-        .collect();
-    let max_depth = if args.recurse { usize::MAX } else { 1 };
-    let root = &args.folder;
-
-    let files: Vec<PathBuf> = WalkDir::new(root)
-        .max_depth(max_depth)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .map(|e| e.into_path())
-        .filter(|p| {
-            p.extension()
-                .and_then(|x| x.to_str())
-                .map(|x| exts.contains(&x.to_lowercase()))
-                .unwrap_or(false)
-        })
-        .collect();
-
-    // 進捗は stderr。JSON モードでは出さない（捕捉されるので不要・ノイズ）。
-    let pb = if out.is_json() {
-        ProgressBar::hidden()
-    } else {
-        let pb = ProgressBar::new(files.len() as u64);
-        pb.set_style(
-            ProgressStyle::with_template("{bar:40} {pos}/{len} デコード中")
-                .unwrap_or_else(|_| ProgressStyle::default_bar()),
-        );
-        pb
-    };
-
-    // キャッシュを開く（失敗時は警告して無効化＝デコードにフォールバック）。
-    let cache = if args.no_cache {
-        None
-    } else {
-        let dir = args.cache_dir.clone().unwrap_or_else(default_cache_dir);
-        match cache::Cache::open(&dir.join("cache.redb")) {
-            Ok(c) => Some(c),
-            Err(e) => {
-                eprintln!("note: キャッシュを無効化します（{e:#}）");
-                None
-            }
-        }
-    };
-    let cache_ref = cache.as_ref();
-
-    // ファイル単位に並列でデコード+ハッシュ（キャッシュ命中はデコードを省く）。成功/失敗を 1 パスで振り分ける。
-    let (results, mut skipped): (
-        Vec<(Hashed, Option<(String, cache::Entry)>)>,
-        Vec<SkippedFile>,
-    ) = files
-        .par_iter()
-        .map(|path| {
-            let r = hash_one(path, root, cache_ref, HASH_ALGO_VERSION);
-            pb.inc(1);
-            r
-        })
-        .partition_map(|r| match r {
-            Ok(x) => Either::Left(x),
-            Err(s) => Either::Right(s),
-        });
-    pb.finish_and_clear();
-
-    // ミス分の新エントリを 1 トランザクションでキャッシュへ書く（失敗は警告のみ）。
-    if let Some(c) = cache_ref {
-        let fresh: Vec<(String, cache::Entry)> =
-            results.iter().filter_map(|(_, e)| e.clone()).collect();
-        if let Err(e) = c.write_all(&fresh) {
-            eprintln!("note: キャッシュ書き込みに失敗（{e:#}）");
-        }
-    }
-    let hashed: Vec<Hashed> = results.into_iter().map(|(h, _)| h).collect();
-
-    // 出力の決定性（SPEC §4）: skippedFiles は path 昇順。
-    skipped.sort_by(|a, b| a.path.cmp(&b.path));
-
-    // pixelSha256 剪定（SPEC §2.1）: dHash 値でバケットし、メンバ ≥2 のみ pixel_sha256 を設定。
-    let mut counts: HashMap<u64, u32> = HashMap::new();
-    for h in &hashed {
-        *counts.entry(h.dhash).or_insert(0) += 1;
-    }
-    let mut images: Vec<ImageRecord> = hashed
-        .iter()
-        .map(|h| ImageRecord {
-            path: h.path.clone(),
-            bytes: h.bytes,
-            width: h.width,
-            height: h.height,
-            format: h.format.clone(),
-            sha256: h.sha256.clone(),
-            pixel_sha256: (counts[&h.dhash] >= 2).then(|| h.rgba_sha256.clone()),
-            phash: Some(hash::to_hex(h.dhash)),
-            thumb: None,
-        })
-        .collect();
-    // 出力の決定性（SPEC §4）: images は path 昇順（groups の順序には影響しない）。
-    images.sort_by(|a, b| a.path.cmp(&b.path));
-
+    let exts = index::parse_exts(&args.ext);
     let threshold = matches!(strictness, Strictness::Perceptual).then_some(args.threshold);
-    let groups = cluster::group(&images, strictness, threshold);
+
+    let opts = IndexOptions {
+        folder: args.folder.clone(),
+        strictness,
+        threshold,
+        ext: exts,
+        recurse: args.recurse,
+        no_cache: args.no_cache,
+        cache_dir: args.cache_dir.clone(),
+    };
+    let index::Indexed {
+        images,
+        groups,
+        skipped,
+    } = index::index_folder(&opts, out.is_json())?;
 
     let duplicates: u32 = groups.iter().map(|g| g.members.len() as u32 - 1).sum();
     let reclaimable: u64 = groups.iter().map(|g| g.reclaimable_bytes).sum();
@@ -240,13 +121,8 @@ pub fn run(args: ScanArgs, out: OutputFormat) -> Result<()> {
 
     let report = ScanReport {
         schema_version: SCHEMA_VERSION,
-        producer: Producer {
-            app: "cli".to_string(),
-            app_version: env!("CARGO_PKG_VERSION").to_string(),
-            vips: decode::vips_version_string(),
-            hash_algo: HASH_ALGO_VERSION.to_string(),
-        },
-        root: root.display().to_string(),
+        producer: util::cli_producer(),
+        root: args.folder.display().to_string(),
         created_at: util::now_rfc3339(),
         strictness,
         threshold,
@@ -286,77 +162,6 @@ pub fn run(args: ScanArgs, out: OutputFormat) -> Result<()> {
         print_text(&report);
     }
     Ok(())
-}
-
-/// 1 枚を（キャッシュ命中なら省略して）デコード+ハッシュする。失敗時は理由付きの SkippedFile。
-/// 戻り値の 2 番目はキャッシュへ書く新エントリ（ヒット時は None）。
-fn hash_one(
-    path: &Path,
-    root: &Path,
-    cache: Option<&cache::Cache>,
-    hash_algo: &str,
-) -> std::result::Result<(Hashed, Option<(String, cache::Entry)>), SkippedFile> {
-    let rel = rel_path(path, root);
-    let inner = || -> Result<(Hashed, Option<(String, cache::Entry)>)> {
-        let meta = std::fs::metadata(path)?;
-        let size = meta.len();
-        let mtime_ns = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_nanos() as u64);
-        // 絶対パスをキャッシュキーにする（cwd や指定方法に依らず安定）。
-        let key = path
-            .canonicalize()
-            .unwrap_or_else(|_| path.to_path_buf())
-            .to_string_lossy()
-            .into_owned();
-
-        // キャッシュ照合（mtime が取れたときのみ）。命中ならデコードを省く。
-        if let (Some(c), Some(mt)) = (cache, mtime_ns) {
-            if let Some(e) = c.get(&key, size, mt, hash_algo) {
-                return Ok((Hashed::from_entry(rel.clone(), e), None));
-            }
-        }
-
-        // ミス → デコード+ハッシュ（d.rgba は scan では不要なので破棄）。
-        let d = pipeline::decode_and_hash(path)?;
-        let entry = cache::Entry {
-            size,
-            mtime_ns: mtime_ns.unwrap_or(0),
-            hash_algo: hash_algo.to_string(),
-            sha256: d.sha256,
-            rgba_sha256: d.rgba_sha256,
-            dhash: d.dhash,
-            width: d.width,
-            height: d.height,
-            format: d.format,
-        };
-        let hashed = Hashed::from_entry(rel.clone(), &entry);
-        // mtime が取れたときだけキャッシュへ書く（取れない時はキャッシュしない）。
-        let new = mtime_ns.map(|_| (key, entry));
-        Ok((hashed, new))
-    };
-    inner().map_err(|e| SkippedFile {
-        path: rel,
-        reason: format!("{e:#}"),
-    })
-}
-
-/// 既定のキャッシュディレクトリ（OS キャッシュ/imgdiff、取得不可なら ./.imgdiff）。
-fn default_cache_dir() -> PathBuf {
-    dirs::cache_dir()
-        .map(|d| d.join("imgdiff"))
-        .unwrap_or_else(|| PathBuf::from(".imgdiff"))
-}
-
-/// 走査ルートからの相対パスを '/' 区切りで返す（SPEC §4）。
-fn rel_path(path: &Path, root: &Path) -> String {
-    let rel = path.strip_prefix(root).unwrap_or(path);
-    rel.components()
-        .map(|c| c.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
 }
 
 fn print_text(r: &ScanReport) {

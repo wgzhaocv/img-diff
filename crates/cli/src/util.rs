@@ -1,6 +1,19 @@
-//! CLI 共通の小ユーティリティ（scan / compare が共有）。
+//! CLI 共通の小ユーティリティ（scan / compare / clean が共有）。
 
+use imgdiff_core::report::{Producer, HASH_ALGO_VERSION};
 use sha2::{Digest, Sha256};
+
+/// この CLI の Producer（app="cli"・バージョンは本クレート・vips 実体・ハッシュ手順）。
+/// scan / compare / clean で共有する。`env!("CARGO_PKG_VERSION")` は**本クレート**の版を指すため、
+/// この構築を core へ移すと版がずれる点に注意（意図的に CLI 側に置く）。
+pub fn cli_producer() -> Producer {
+    Producer {
+        app: "cli".to_string(),
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        vips: crate::decode::vips_version_string(),
+        hash_algo: HASH_ALGO_VERSION.to_string(),
+    }
+}
 
 /// バイト列の SHA-256 を小文字 16 進 64 文字で返す。
 pub fn sha256_hex(bytes: &[u8]) -> String {

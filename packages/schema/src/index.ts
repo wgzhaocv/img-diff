@@ -154,5 +154,54 @@ export interface CompareResult {
   diffImage?: AssetRef;
 }
 
-/** scan / compare をまとめた最上位型（--json / レポート） */
-export type Report = ScanReport | CompareResult;
+/** 1 件の削除予定。path / keeper は root 相対（scan と一貫） */
+export interface PlannedDeletion {
+  path: string;
+  /** 属する重複グループ id */
+  groupId: number;
+  bytes: number;
+  /** このグループで残すファイル（root 相対） */
+  keeper: string;
+}
+
+/** apply 時の 1 件の削除結果 */
+export interface Deletion {
+  path: string;
+  status: "trashed" | "failed";
+  /** failed のときのみ理由 */
+  error?: string;
+}
+
+export interface CleanStats {
+  scanned: number;
+  /** autoDeletable な重複グループ数 */
+  groups: number;
+  planned: number;
+  trashed: number;
+  failed: number;
+  elapsedMs: number;
+}
+
+/** clean（重複削除）の結果。dry-run/apply 共通の削除計画 + apply 時の実行結果（SPEC.md §5.1） */
+export interface CleanReport {
+  schemaVersion: typeof SCHEMA_VERSION;
+  kind: "clean";
+  producer: Producer;
+  root: string;
+  createdAt: string;
+  strictness: Strictness;
+  /** true=計画のみ（削除せず）。false=--apply で実行済み */
+  dryRun: boolean;
+  /** 削除予定（autoDeletable グループの keeper 以外）。dry-run/apply 共通 */
+  plannedDeletions: PlannedDeletion[];
+  /** apply 時の実行結果（1 予定 1 件）。dry-run では空 */
+  deletions: Deletion[];
+  /** plannedDeletions の bytes 合計 */
+  reclaimableBytes: number;
+  /** apply で実際にゴミ箱送りできたバイト合計。dry-run は 0 */
+  trashedBytes: number;
+  stats: CleanStats;
+}
+
+/** scan / compare / clean をまとめた最上位型（--json / レポート） */
+export type Report = ScanReport | CompareResult | CleanReport;

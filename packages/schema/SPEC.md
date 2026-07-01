@@ -103,6 +103,19 @@ CLI は原生に、web は wasm にコンパイルして共有する。出力 JS
 - `keeper` は全モードで計算（最大解像度 → 最大バイト → path 昇順）。`reclaimableBytes` も計算するが、
   削除提案は `autoDeletable = true` のグループのみ。
 
+## 5.1 clean（削除）
+
+重複を安全に削除する操作。**削除時点でその場で再スキャン**し（古い出力を信じない）、グループ化（§5）の結果に基づく。
+
+- **対象**: `autoDeletable = true`（exact/pixel）グループの **keeper 以外**のメンバのみ。`keeper` は必ず残す。
+  perceptual は `autoDeletable = false` のため**絶対に削除しない**（CLI では厳密度に perceptual を選べない）。
+- **既定は dry-run**（`plannedDeletions` を出すだけで削除しない）。`--apply` で初めて実削除する。
+  非対話（確認プロンプトなし）＝安全は「dry-run 既定 + 明示 `--apply`」で担保。
+- **ゴミ箱送りのみ**（復元可能）。永久削除の口は設けない。
+- 出力は `CleanReport`（`kind:"clean"`）。`plannedDeletions[]`（path/groupId/bytes/keeper・path は root 相対）、
+  apply 時は各 `deletions[]`（`status:"trashed"|"failed"`, `error?`）、`reclaimableBytes` / `trashedBytes` / `stats`。
+  1 件の失敗で全体は止めず per-file に記録する。
+
 ## 6. バージョニング / 再現性
 
 - `schemaVersion` は JSON の**形**、`hashAlgo`(= HASH_ALGO_VERSION) は**計算手順**。

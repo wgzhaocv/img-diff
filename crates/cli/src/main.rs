@@ -5,9 +5,11 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 mod cache;
+mod clean;
 mod compare;
 mod decode;
 mod error;
+mod index;
 mod output;
 mod pipeline;
 mod scan;
@@ -37,6 +39,8 @@ enum Cmd {
     Scan(scan::ScanArgs),
     /// 2 枚の画像を直接比較する（並べて + ピクセル diff + SSIM）
     Compare(compare::CompareArgs),
+    /// 重複画像を安全に削除する（既定 dry-run・--apply でゴミ箱へ）
+    Clean(clean::CleanArgs),
 }
 
 fn main() {
@@ -68,5 +72,6 @@ fn run(command: Cmd, out: OutputFormat) -> Result<()> {
     match command {
         Cmd::Scan(args) => scan::run(args, out),
         Cmd::Compare(args) => compare::run(args, out),
+        Cmd::Clean(args) => clean::run(args, out),
     }
 }

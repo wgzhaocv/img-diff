@@ -2,12 +2,10 @@
 
 use crate::error::CliError;
 use crate::output::{self, OutputFormat};
-use crate::{decode, pipeline, util};
+use crate::{pipeline, util};
 use anyhow::Result;
 use clap::Args;
-use imgdiff_core::report::{
-    AssetRef, CompareResult, ImageRecord, Producer, Report, HASH_ALGO_VERSION, SCHEMA_VERSION,
-};
+use imgdiff_core::report::{AssetRef, CompareResult, ImageRecord, Report, SCHEMA_VERSION};
 use imgdiff_core::{compare as score, diff, hash, preprocess};
 use std::path::{Path, PathBuf};
 
@@ -77,12 +75,7 @@ pub fn run(args: CompareArgs, out: OutputFormat) -> Result<()> {
 
     let result = CompareResult {
         schema_version: SCHEMA_VERSION,
-        producer: Producer {
-            app: "cli".to_string(),
-            app_version: env!("CARGO_PKG_VERSION").to_string(),
-            vips: decode::vips_version_string(),
-            hash_algo: HASH_ALGO_VERSION.to_string(),
-        },
+        producer: util::cli_producer(),
         created_at: util::now_rfc3339(),
         a: rec_a,
         b: rec_b,
