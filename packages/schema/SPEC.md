@@ -78,12 +78,14 @@ CLI は原生に、web は wasm にコンパイルして共有する。出力 JS
 
 ## 4. 出力（--json / レポート）
 
-最上位は `Report = ScanReport | CompareResult`、`kind`（"scan" / "compare"）で判別。
+最上位は `Report = ScanReport | CompareResult | CleanReport | FindReport`、
+`kind`（"scan" / "compare" / "clean" / "find"）で判別。
 全出力に `producer { app, appVersion, vips, hashAlgo }` を付与。
 
 - `ScanReport`: `images[]` + `groups[]` + `skippedFiles[]` + `stats`。
   **決定性のため `images[]` と `skippedFiles[]` は path 昇順**（`groups[]` は §5 の通り最小メンバ path 昇順）。
 - `CompareResult`: `a` / `b` の `ImageRecord` + 各種スコア + 任意の `diffImage`（§3）。比較不能時は §3 の通り null。
+- `CleanReport`: §5.1。`FindReport`: §5.2。
 
 `ImageRecord.path` は scan ではルートからの相対パス（`/` 区切り）、compare では入力で与えたパス。
 `AssetRef` は `{kind:"path"}` か `{kind:"dataUri"}`（CLI はパス、web は data URI）。
@@ -115,6 +117,25 @@ CLI は原生に、web は wasm にコンパイルして共有する。出力 JS
 - 出力は `CleanReport`（`kind:"clean"`）。`plannedDeletions[]`（path/groupId/bytes/keeper・path は root 相対）、
   apply 時は各 `deletions[]`（`status:"trashed"|"failed"`, `error?`）、`reclaimableBytes` / `trashedBytes` / `stats`。
   1 件の失敗で全体は止めず per-file に記録する。
+
+## 5.2 find（1 枚を問い合わせ、フォルダ内で類似検索）
+
+「この 1 枚に似た画像がフォルダ内にどれだけあるか」を層別に列挙する操作（scan が全対全でグループ化するのに対し、find は 1 対 N）。
+索引は scan と同一（並列デコード + dHash/SHA + redb キャッシュを共有）。
+
+- **入力**: `query`（問い合わせ画像 1 枚）+ `folder`（探索先）。`--threshold`（perceptual 層のハミング閾値・既定 10）、
+  `--ext` / `--recurse` は scan と同じ。`--top N` で上位 N 件に切り詰め。
+- **層（tier）** は §2 の strictness と同じ 3 軸で、各マッチに付与する:
+  - `exact`: `query` と `sha256` 一致（バイト完全同一）。
+  - `pixel`: `pixelSha256` 一致（デコード後ピクセル一致・EXIF/再エンコード/寸法無視。dHash 距離 0）。
+  - `perceptual`: dHash ハミング距離 ≤ `threshold`（要目視）。
+    1 マッチは最上位に該当する 1 層のみ（exact > pixel > perceptual の優先）。`hammingDistance` は層に依らず実距離を入れる。
+- **query 自身の除外**: `query` が `folder` 内にある場合、それ自身（絶対パス一致）はマッチから除く。
+  同一内容の**別ファイル**は正当な `exact` として列挙する。
+- **決定性（§4）**: `matches[]` は **層順（exact→pixel→perceptual）→ ハミング距離昇順 → path 昇順**。`path` は root 相対（`/` 区切り）。
+- 出力は `FindReport`（`kind:"find"`）: `query`（`ImageRecord`・path は入力で与えたパス）+ `threshold` +
+  `matches[]`（`{path, bytes, width, height, format, tier, hammingDistance}`）+ `skippedFiles[]` + `stats{scanned, skipped, matched, elapsedMs}`。
+- find は非破壊（削除しない）。「似たものを消す」は scan → clean を使う。
 
 ## 6. バージョニング / 再現性
 

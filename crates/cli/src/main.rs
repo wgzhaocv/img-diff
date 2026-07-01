@@ -9,6 +9,7 @@ mod clean;
 mod compare;
 mod decode;
 mod error;
+mod find;
 mod index;
 mod output;
 mod pipeline;
@@ -42,6 +43,8 @@ enum Cmd {
     Scan(scan::ScanArgs),
     /// 2 枚の画像を直接比較する（並べて + ピクセル diff + SSIM）
     Compare(compare::CompareArgs),
+    /// 1 枚の画像に似たものをフォルダ内で探し、層別（exact/pixel/perceptual）に列挙する
+    Find(find::FindArgs),
     /// 重複画像を安全に削除する（既定 dry-run・--apply でゴミ箱へ）
     Clean(clean::CleanArgs),
     /// AI 手册（skill）を stdout に出す（常設導入は skills.sh: npx skills add）
@@ -57,8 +60,11 @@ fn main() {
     let out = cli.output.resolve();
     let json = out.is_json();
     // scan/compare/clean を text で実行し成功したときだけ、更新通知を出す（1h クールダウン・fail-open）。
-    let notify_update =
-        !json && matches!(cli.command, Cmd::Scan(_) | Cmd::Compare(_) | Cmd::Clean(_));
+    let notify_update = !json
+        && matches!(
+            cli.command,
+            Cmd::Scan(_) | Cmd::Compare(_) | Cmd::Find(_) | Cmd::Clean(_)
+        );
 
     let result = run(cli.command, out);
 
@@ -93,6 +99,10 @@ fn run(command: Cmd, out: OutputFormat) -> Result<()> {
         Cmd::Compare(args) => {
             decode::init()?;
             compare::run(args, out)
+        }
+        Cmd::Find(args) => {
+            decode::init()?;
+            find::run(args, out)
         }
         Cmd::Clean(args) => {
             decode::init()?;

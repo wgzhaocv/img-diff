@@ -203,5 +203,51 @@ export interface CleanReport {
   stats: CleanStats;
 }
 
-/** scan / compare / clean をまとめた最上位型（--json / レポート） */
-export type Report = ScanReport | CompareResult | CleanReport;
+/**
+ * find の一致の層（strictness と同じ 3 軸）。1 マッチは最上位に該当する 1 層のみ。
+ * exact > pixel > perceptual の優先。
+ */
+export type FindTier = "exact" | "pixel" | "perceptual";
+
+/** find の 1 マッチ。path は探索ルートからの相対（'/' 区切り、scan と一貫） */
+export interface FindMatch {
+  path: string;
+  bytes: number;
+  width: number;
+  height: number;
+  format: string;
+  tier: FindTier;
+  /** 問い合わせ画像との dHash ハミング距離（0..HASH_BITS）。exact/pixel でも実距離を入れる */
+  hammingDistance: number;
+}
+
+export interface FindStats {
+  scanned: number;
+  skipped: number;
+  /** 一致件数（matches.length） */
+  matched: number;
+  elapsedMs: number;
+}
+
+/**
+ * find（1 枚を問い合わせ、フォルダ内で類似検索）の結果（SPEC.md §5.2）。
+ * matches は 層順（exact→pixel→perceptual）→ ハミング距離昇順 → path 昇順。
+ */
+export interface FindReport {
+  schemaVersion: typeof SCHEMA_VERSION;
+  kind: "find";
+  producer: Producer;
+  /** 探索したルート */
+  root: string;
+  createdAt: string;
+  /** perceptual 層のハミング閾値 */
+  threshold: number;
+  /** 問い合わせ画像（path は入力で与えたパス。compare の a/b と同じ流儀） */
+  query: ImageRecord;
+  matches: FindMatch[];
+  skippedFiles: SkippedFile[];
+  stats: FindStats;
+}
+
+/** scan / compare / clean / find をまとめた最上位型（--json / レポート） */
+export type Report = ScanReport | CompareResult | CleanReport | FindReport;

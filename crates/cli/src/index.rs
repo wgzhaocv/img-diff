@@ -41,15 +41,16 @@ pub struct Indexed {
 }
 
 /// デコード+ハッシュの中間結果（pixelSha256 剪定の前）。
-struct Hashed {
-    path: String,
-    bytes: u64,
-    width: u32,
-    height: u32,
-    format: String,
-    sha256: String,
-    dhash: u64,
-    rgba_sha256: String,
+/// scan/clean は `index_folder` 経由、find は `hash_folder` 経由で直接使う（rgba_sha256 が pixel 判定に要る）。
+pub struct Hashed {
+    pub path: String,
+    pub bytes: u64,
+    pub width: u32,
+    pub height: u32,
+    pub format: String,
+    pub sha256: String,
+    pub dhash: u64,
+    pub rgba_sha256: String,
 }
 
 impl Hashed {
@@ -68,8 +69,10 @@ impl Hashed {
     }
 }
 
-/// フォルダを索引し、clustering まで行う。`quiet`（= json モード）で進捗バーを隠す。
-pub fn index_folder(opts: &IndexOptions, quiet: bool) -> Result<Indexed> {
+/// フォルダを走査し、各ファイルをデコード+ハッシュした中間結果（clustering・剪定の前）を返す。
+/// scan/clean は `index_folder` 経由、find はこれを直接使う（rgba_sha256 で pixel 一致を見るため）。
+/// `strictness`/`threshold` はここでは未使用（clustering しないため）。`quiet`（= json）で進捗を隠す。
+pub fn hash_folder(opts: &IndexOptions, quiet: bool) -> Result<(Vec<Hashed>, Vec<SkippedFile>)> {
     let root = opts.folder.as_path();
     let max_depth = if opts.recurse { usize::MAX } else { 1 };
 
@@ -159,6 +162,13 @@ pub fn index_folder(opts: &IndexOptions, quiet: bool) -> Result<Indexed> {
     // スキャンエラー（上記）とデコード失敗をまとめる。出力の決定性（SPEC §4）で path 昇順。
     skipped.extend(walk_skipped);
     skipped.sort_by(|a, b| a.path.cmp(&b.path));
+
+    Ok((hashed, skipped))
+}
+
+/// フォルダを索引し、clustering まで行う（scan/clean 用）。`quiet`（= json モード）で進捗を隠す。
+pub fn index_folder(opts: &IndexOptions, quiet: bool) -> Result<Indexed> {
+    let (hashed, skipped) = hash_folder(opts, quiet)?;
 
     // pixelSha256 剪定（SPEC §2.1）: dHash 値でバケットし、メンバ ≥2 のみ pixel_sha256 を設定。
     let mut counts: HashMap<u64, u32> = HashMap::new();

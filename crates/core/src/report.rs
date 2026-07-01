@@ -201,6 +201,60 @@ pub struct CleanStats {
     pub elapsed_ms: u64,
 }
 
+/// find（1 枚を問い合わせ、フォルダ内の類似を層別に列挙）の一致の層。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FindTier {
+    /// ファイル SHA-256 一致（バイト完全同一）。
+    Exact,
+    /// デコード後ピクセル一致（EXIF/再エンコード無視）。
+    Pixel,
+    /// dHash のハミング距離が閾値以下（知覚的に近い・要目視）。
+    Perceptual,
+}
+
+/// find の 1 マッチ。path は探索ルートからの相対（'/' 区切り、scan と一貫）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FindMatch {
+    pub path: String,
+    pub bytes: u64,
+    pub width: u32,
+    pub height: u32,
+    pub format: String,
+    pub tier: FindTier,
+    /// 問い合わせ画像との dHash ハミング距離（0..=64）。exact/pixel でも実距離を入れる。
+    pub hamming_distance: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FindStats {
+    pub scanned: u32,
+    pub skipped: u32,
+    pub matched: u32,
+    pub elapsed_ms: u64,
+}
+
+/// find（1 枚を問い合わせ、フォルダ内で類似検索）の結果。SPEC.md §5.2。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FindReport {
+    pub schema_version: u32,
+    pub producer: Producer,
+    /// 探索ルート。
+    pub root: String,
+    pub created_at: String,
+    /// perceptual 層のハミング閾値。
+    pub threshold: u32,
+    /// 問い合わせ画像（path は入力で与えたパス。compare の a/b と同じ流儀）。
+    pub query: ImageRecord,
+    /// 層順（exact→pixel→perceptual）・距離昇順・path 昇順で並ぶ（SPEC §4 決定性）。
+    pub matches: Vec<FindMatch>,
+    pub skipped_files: Vec<SkippedFile>,
+    pub stats: FindStats,
+}
+
 /// 最上位（kind で判別）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
@@ -208,4 +262,5 @@ pub enum Report {
     Scan(ScanReport),
     Compare(CompareResult),
     Clean(CleanReport),
+    Find(FindReport),
 }
