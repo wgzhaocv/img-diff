@@ -38,6 +38,11 @@ struct TargetEntry {
 
 fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
+        .tls_config(
+            ureq::tls::TlsConfig::builder()
+                .provider(ureq::tls::TlsProvider::NativeTls)
+                .build(),
+        )
         .timeout_global(Some(Duration::from_secs(180)))
         .build()
         .into()

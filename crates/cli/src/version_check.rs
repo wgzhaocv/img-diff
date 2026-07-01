@@ -42,6 +42,11 @@ pub fn maybe_notify() {
 fn fetch_latest() -> Option<String> {
     let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
     let agent: ureq::Agent = ureq::Agent::config_builder()
+        .tls_config(
+            ureq::tls::TlsConfig::builder()
+                .provider(ureq::tls::TlsProvider::NativeTls)
+                .build(),
+        )
         .timeout_global(Some(TIMEOUT))
         .build()
         .into();
