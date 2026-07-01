@@ -12,16 +12,16 @@
 - **スキャンエラー記録** — `WalkDir` のエントリエラー（権限拒否等）を握り潰さず `skippedFiles` に記録（scan/clean 共通）。
 - **AI 手册 skill** — 正本 `skills/imgdiff-cli/SKILL.md`（**skills.sh 生態**の布局）。CLI は `include_str!` で内嵌し `imgdiff skill` で stdout に表示。常設導入/自動更新/完全性は skills.sh に委譲（`npx skills add github:wgzhaocv/img-diff` / `npx skills update` / lock の `skillFolderHash`）。`~/.agents/skills` へ**自投影しない**（包管理器の領域）。
 - **HEIC/HEIF/AVIF 対応** — libheif 導入で libvips が `vips-heif` モジュールを認識。既定 ext に heic/heif/avif 追加（scan/clean）。配布時は libheif + コーデック DLL も同梱要。
+- **Windows 自己完結パッケージ** — `scripts/package-windows.sh`（DLL 閉包 + heif モジュールを MSYS2 レイアウト模倣で同梱＝PATH 不要）。zip 54MB。**MSYS2 を PATH から排除した素の環境で scan/compare/HEIC/AVIF 動作を検証済み**。
 - **性能** — release + キャッシュで実画像60枚 COLD ~2.3s → WARM ~90ms（debug 比 6.7x、再スキャン ~26x）。
 - **未着手** — web（`apps/website/`。`UI.md` + skill `imgdiff-ui` は用意済み）。
 
 ## 次の手（優先順）
 
-### 1. 配布（distribution・tbm 方式を借用）— まず Windows から
+### 1. 配布の残り（Windows パッケージは完了・tbm 方式を借用）
 
-- **Windows パッケージ**: imgdiff.exe + libvips ランタイム DLL（+ vips-heif/libheif 等コーデック）を同梱した zip。exe と同ディレクトリに DLL を置けば PATH 不要。**要検証: MSYS2 を PATH から外した素の環境で動くこと**。
 - 網版チェック（1h クールダウン・通知のみ）+ `imgdiff update`（`self-replace`）+ release manifest+sha256。ホストは **CF 静的**（version.json + アーカイブ + install ページ）。
-- **web の install ページで OS を選ばせ対応スクリプトを出す**。Linux/Mac は後日（Mac は Mac/CI）。
+- **web の install ページで OS を選ばせ対応スクリプトを出す**（CLI は zip、skill は `npx skills add`）。Linux/Mac パッケージは後日（Mac は Mac/CI）。
 
 ### 2. web（CLI 完了後）
 
