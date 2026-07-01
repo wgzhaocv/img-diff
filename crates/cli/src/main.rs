@@ -42,7 +42,7 @@ enum Cmd {
     Compare(compare::CompareArgs),
     /// 重複画像を安全に削除する（既定 dry-run・--apply でゴミ箱へ）
     Clean(clean::CleanArgs),
-    /// AI 手册（skill）を Claude / Codex に書き出す・表示する（通常は起動時に自動投影）
+    /// AI 手册（skill）を stdout に出す（常設導入は skills.sh: npx skills add）
     Skill(skill::SkillArgs),
 }
 
@@ -50,12 +50,6 @@ fn main() {
     let cli = Cli::parse();
     let out = cli.output.resolve();
     let json = out.is_json();
-
-    // AI 手册（skill）を毎起動で self-heal（best-effort・沈黙）。libvips 初期化前に行い vips 不在でも
-    // 投影を保つ。skill サブコマンド自身は明示操作なので除く（uninstall 直前に再投影しない）。
-    if !matches!(cli.command, Cmd::Skill(_)) {
-        let _ = skill::ensure_fresh();
-    }
 
     let result = run(cli.command, out);
 

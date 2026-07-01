@@ -1,3 +1,9 @@
+---
+name: imgdiff-cli
+description: imgdiff CLI（重複/類似画像の検出 scan・2枚比較 compare・重複削除 clean）を AI が駆動するための操作手册。auto JSON 出力・{error,code}・厳密度(exact/pixel/perceptual)・安全な削除フロー（dry-run 既定・ゴミ箱）。imgdiff を使う/呼ぶときに従う。
+allowed-tools: Bash(imgdiff:*)
+---
+
 # imgdiff CLI 操作手册（AI 向け）
 
 重複・類似画像を扱う CLI `imgdiff`。**AI 駆動が主用途**（tbm と同型: auto JSON 出力・`{error,code}`・非対話・stdout=データ/stderr=進捗）。
