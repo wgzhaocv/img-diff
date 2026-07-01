@@ -21,7 +21,7 @@ pub fn parse_exts(csv: &str) -> Vec<String> {
 
 /// 索引の入力（scan / clean 共通）。
 pub struct IndexOptions {
-    /// 走査ルート。
+    /// スキャンルート。
     pub folder: PathBuf,
     pub strictness: Strictness,
     /// perceptual のときのみ意味を持つハミング閾値（他は None）。
@@ -73,7 +73,7 @@ pub fn index_folder(opts: &IndexOptions, quiet: bool) -> Result<Indexed> {
     let root = opts.folder.as_path();
     let max_depth = if opts.recurse { usize::MAX } else { 1 };
 
-    // 走査。権限拒否などのエントリエラーは握り潰さず skippedFiles に記録する。
+    // スキャン。権限拒否などのエントリエラーは握り潰さず skippedFiles に記録する。
     let mut walk_skipped: Vec<SkippedFile> = Vec::new();
     let files: Vec<PathBuf> = WalkDir::new(root)
         .max_depth(max_depth)
@@ -87,7 +87,7 @@ pub fn index_folder(opts: &IndexOptions, quiet: bool) -> Result<Indexed> {
                     .unwrap_or_else(|| "<不明>".to_string());
                 walk_skipped.push(SkippedFile {
                     path,
-                    reason: format!("走査エラー: {err}"),
+                    reason: format!("スキャンエラー: {err}"),
                 });
                 None
             }
@@ -156,7 +156,7 @@ pub fn index_folder(opts: &IndexOptions, quiet: bool) -> Result<Indexed> {
     }
     let hashed: Vec<Hashed> = results.into_iter().map(|(h, _)| h).collect();
 
-    // 走査エラー（上記）とデコード失敗をまとめる。出力の決定性（SPEC §4）で path 昇順。
+    // スキャンエラー（上記）とデコード失敗をまとめる。出力の決定性（SPEC §4）で path 昇順。
     skipped.extend(walk_skipped);
     skipped.sort_by(|a, b| a.path.cmp(&b.path));
 
@@ -253,7 +253,7 @@ fn default_cache_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".imgdiff"))
 }
 
-/// 走査ルートからの相対パスを '/' 区切りで返す（SPEC §4）。
+/// スキャンルートからの相対パスを '/' 区切りで返す（SPEC §4）。
 fn rel_path(path: &Path, root: &Path) -> String {
     let rel = path.strip_prefix(root).unwrap_or(path);
     rel.components()

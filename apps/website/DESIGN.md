@@ -17,7 +17,7 @@ IndexedDB・権限の扱い）を定める。**キャッシュやストレージ
     Cross-Origin-Opener-Policy: same-origin
     Cross-Origin-Embedder-Policy: require-corp
   ```
-- ディレクトリ走査は **File System Access API（Chromium 限定）**。非対応ブラウザと
+- ディレクトリスキャンは **File System Access API（Chromium 限定）**。非対応ブラウザと
   「権限なし」状態のフォールバックは §6。
 
 ## 1. レイヤ構成

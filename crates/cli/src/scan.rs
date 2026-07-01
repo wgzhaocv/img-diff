@@ -1,5 +1,5 @@
-//! scan サブコマンド: フォルダを走査して重複/類似画像をグループ化する（SPEC §2,§5）。
-//! 索引処理（走査+デコード+ハッシュ+clustering）は clean と共有するため `index` モジュールへ。
+//! scan サブコマンド: フォルダをスキャンして重複/類似画像をグループ化する（SPEC §2,§5）。
+//! 索引処理（スキャン+デコード+ハッシュ+clustering）は clean と共有するため `index` モジュールへ。
 
 use crate::error::CliError;
 use crate::index::{self, IndexOptions};

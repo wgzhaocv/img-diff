@@ -35,7 +35,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// フォルダを走査して重複/類似画像をグループ化する
+    /// フォルダをスキャンして重複/類似画像をグループ化する
     Scan(scan::ScanArgs),
     /// 2 枚の画像を直接比較する（並べて + ピクセル diff + SSIM）
     Compare(compare::CompareArgs),
