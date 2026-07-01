@@ -73,10 +73,25 @@ pub fn index_folder(opts: &IndexOptions, quiet: bool) -> Result<Indexed> {
     let root = opts.folder.as_path();
     let max_depth = if opts.recurse { usize::MAX } else { 1 };
 
+    // 走査。権限拒否などのエントリエラーは握り潰さず skippedFiles に記録する。
+    let mut walk_skipped: Vec<SkippedFile> = Vec::new();
     let files: Vec<PathBuf> = WalkDir::new(root)
         .max_depth(max_depth)
         .into_iter()
-        .filter_map(|e| e.ok())
+        .filter_map(|res| match res {
+            Ok(e) => Some(e),
+            Err(err) => {
+                let path = err
+                    .path()
+                    .map(|p| rel_path(p, root))
+                    .unwrap_or_else(|| "<不明>".to_string());
+                walk_skipped.push(SkippedFile {
+                    path,
+                    reason: format!("走査エラー: {err}"),
+                });
+                None
+            }
+        })
         .filter(|e| e.file_type().is_file())
         .map(|e| e.into_path())
         .filter(|p| {
@@ -141,7 +156,8 @@ pub fn index_folder(opts: &IndexOptions, quiet: bool) -> Result<Indexed> {
     }
     let hashed: Vec<Hashed> = results.into_iter().map(|(h, _)| h).collect();
 
-    // 出力の決定性（SPEC §4）: skippedFiles は path 昇順。
+    // 走査エラー（上記）とデコード失敗をまとめる。出力の決定性（SPEC §4）で path 昇順。
+    skipped.extend(walk_skipped);
     skipped.sort_by(|a, b| a.path.cmp(&b.path));
 
     // pixelSha256 剪定（SPEC §2.1）: dHash 値でバケットし、メンバ ≥2 のみ pixel_sha256 を設定。
