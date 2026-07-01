@@ -18,5 +18,14 @@
   "editor.formatOnSaveMode": "file",
   "editor.codeActionsOnSave": {
     "source.fixAll.oxc": "explicit"
+  },
+  "//": "rust-analyzer は windows-gnu でビルドするため mingw の as/dlltool と libvips の pkg-config が要る。エディタの PATH に無いと crates/wasm(dlltool)や crates/cli(libvips)で誤検知エラーになるのでここで補う（コードは正常・cargo check は緑）。",
+  "rust-analyzer.cargo.extraEnv": {
+    "PATH": "C:\\msys64\\mingw64\\bin;${env:PATH}",
+    "PKG_CONFIG_PATH": "C:\\msys64\\mingw64\\lib\\pkgconfig"
+  },
+  "rust-analyzer.check.extraEnv": {
+    "PATH": "C:\\msys64\\mingw64\\bin;${env:PATH}",
+    "PKG_CONFIG_PATH": "C:\\msys64\\mingw64\\lib\\pkgconfig"
   }
 }

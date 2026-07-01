@@ -1,0 +1,155 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* 暗色は <html class="dark">（theme.ts が切替）。 */
+@custom-variant dark (&:is(.dark *));
+
+/* ============================================================
+   img-diff テーマ。見た目の正本は apps/website/UI.md §5。
+   shadcn/ui の意味変数へ UI.md のトークンを割り当て、shadcn 部品に
+   自分の style（主色 Teal・WCAG AAA・反AI）を反映させる。
+   勝手に色を増やさない。増やすときは UI.md に足してから。
+   ============================================================ */
+
+:root {
+  --radius: 8px; /* UI.md --radius（ボタン・入力・サムネ） */
+
+  /* 面・背景 */
+  --background: #fbfdfd; /* --bg 冷白 */
+  --foreground: #0f2a27; /* --text 青み黒 */
+  --card: #ffffff; /* --surface */
+  --card-foreground: #0f2a27;
+  --popover: #ffffff;
+  --popover-foreground: #0f2a27;
+
+  /* 主色 Teal（靛藍ではない） */
+  --primary: #0f766e;
+  --primary-foreground: #ffffff; /* --primary-fg */
+
+  /* 副次・muted・accent */
+  --secondary: #f4f8f7; /* --surface-2 */
+  --secondary-foreground: #0f2a27;
+  --muted: #f4f8f7;
+  --muted-foreground: #3d504d; /* --text-secondary（白背景 7:1 = AAA） */
+  --accent: #e6f2f0; /* --primary-soft（teal 極薄面） */
+  --accent-foreground: #115e59; /* --primary-text */
+
+  /* セマンティック */
+  --destructive: #b91c1c; /* --danger */
+  --border: #dce6e5;
+  --input: #c3d2d0; /* --border-strong（入力罫線は少し濃く） */
+  --ring: #0f766e; /* --focus-ring */
+
+  /* img-diff 固有（shadcn 標準にない・§5） */
+  --primary-text: #115e59; /* 小さい teal 文字・リンク（白背景 AAA） */
+  --diff-overlay: #ff2d55; /* 画素 diff（teal と補色） */
+  --warning: #92510a;
+  --checker: #eef3f2; /* 透過 PNG の市松 */
+
+  /* 影（UI.md §5.4: teal 基調の控えめな影。glow 禁止）。 */
+  --ui-shadow-sm: 0 1px 2px rgba(15, 42, 39, 0.06);
+  --ui-shadow-md: 0 2px 8px rgba(15, 42, 39, 0.08);
+}
+
+.dark {
+  --background: #0b1413;
+  --foreground: #e7f1ef;
+  --card: #111e1c;
+  --card-foreground: #e7f1ef;
+  --popover: #111e1c;
+  --popover-foreground: #e7f1ef;
+
+  --primary: #2dd4bf; /* 暗色では明るい teal をアクセント */
+  --primary-foreground: #06201d;
+
+  --secondary: #16211f;
+  --secondary-foreground: #e7f1ef;
+  --muted: #16211f;
+  --muted-foreground: #a9bdba;
+  --accent: #123430;
+  --accent-foreground: #2dd4bf;
+
+  --destructive: #f87171;
+  --border: #1e2e2c;
+  --input: #2a3e3b;
+  --ring: #2dd4bf;
+
+  --primary-text: #2dd4bf;
+  --diff-overlay: #ff5470;
+  --warning: #e0b057;
+  --checker: #17231f;
+
+  /* 暗色は影を弱め、罫線主体に（UI.md §5.2）。 */
+  --ui-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --ui-shadow-md: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+@theme inline {
+  /* タイポ（UI.md §5.3。CJK 含むシステムフォント） */
+  --font-sans:
+    ui-sans-serif, system-ui, "Segoe UI", "Hiragino Kaku Gothic ProN", "Noto Sans JP", Meiryo,
+    sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", Consolas, "Noto Sans Mono CJK JP", monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* img-diff 固有ユーティリティ（bg-diff-overlay / text-primary-text 等で使える） */
+  --color-diff-overlay: var(--diff-overlay);
+  --color-primary-text: var(--primary-text);
+  --color-warning: var(--warning);
+  --color-checker: var(--checker);
+
+  /* 影を UI.md 値へ写像（shadcn の shadow-xs/sm/md を teal 基調で上書き・光らせない）。 */
+  --shadow-2xs: var(--ui-shadow-sm);
+  --shadow-xs: var(--ui-shadow-sm);
+  --shadow-sm: var(--ui-shadow-sm);
+  --shadow-md: var(--ui-shadow-md);
+
+  /* 角丸（UI.md §5.4: sm 6 / base 8 / lg 12） */
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 4px);
+  --radius-xl: calc(var(--radius) + 8px);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  /* 統計・件数・容量・SSIM・ハッシュは等幅数字（UI.md 原則3：揺れない数字）。 */
+  .num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+  /* 動きは reduce 設定を尊重して実質無効化（UI.md §5.4 / WCAG）。 */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}

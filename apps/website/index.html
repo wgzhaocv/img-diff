@@ -1,13 +1,31 @@
 <!doctype html>
-<html lang="en">
+<html lang="ja">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>website</title>
+    <meta
+      name="description"
+      content="重複・類似画像をブラウザ内で検出。フォルダ査重と 2 枚比較。画像は送信されません。"
+    />
+    <title>img-diff — 重複・類似画像を探す</title>
+    <!-- 描画前にテーマを確定して FOUC を防ぐ（保存値 → OS 設定の順）。shadcn 規約の .dark クラス。 -->
+    <script>
+      (() => {
+        try {
+          const saved = localStorage.getItem("imgdiff-theme");
+          const dark = saved
+            ? saved === "dark"
+            : window.matchMedia("(prefers-color-scheme: dark)").matches;
+          document.documentElement.classList.toggle("dark", dark);
+        } catch {
+          /* 既定は亮色（class なし）。 */
+        }
+      })();
+    </script>
   </head>
   <body>
-    <div id="app"></div>
-    <script type="module" src="/src/main.ts"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

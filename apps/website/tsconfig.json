@@ -2,9 +2,17 @@
   "compilerOptions": {
     "target": "es2023",
     "module": "esnext",
-    "lib": ["ES2023", "DOM"],
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": ["vite-plus/client"],
     "skipLibCheck": true,
+
+    /* React（自動 JSX ランタイム: import React 不要） */
+    "jsx": "react-jsx",
+
+    /* パスエイリアス（shadcn/ui 規約の @/*）。baseUrl 無し＝tsconfig 相対で解決。 */
+    "paths": {
+      "@/*": ["./src/*"]
+    },
 
     /* Bundler mode */
     "moduleResolution": "bundler",
