@@ -41,8 +41,12 @@ impl Cache {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).ok();
         }
-        let db = redb::Database::create(path)
-            .map_err(|e| CliError::new("io_error", format!("キャッシュを開けません: {e}")))?;
+        let db = redb::Database::create(path).map_err(|e| {
+            CliError::new(
+                "io_error",
+                format!("キャッシュを開けません: {e}（--no-cache で回避できます）"),
+            )
+        })?;
 
         let mut loaded = HashMap::new();
         let rtxn = db.begin_read()?;

@@ -117,7 +117,15 @@ fn write_diff_png(
         image::ColorType::Rgba8,
         image::ImageFormat::Png,
     )
-    .map_err(|e| CliError::new("io_error", format!("{}: {e}", path.display())))?;
+    .map_err(|e| {
+        CliError::new(
+            "io_error",
+            format!(
+                "{}: {e}（出力先ディレクトリが存在し書き込み可能か確認してください）",
+                path.display()
+            ),
+        )
+    })?;
     Ok(AssetRef::Path {
         path: path.display().to_string(),
     })

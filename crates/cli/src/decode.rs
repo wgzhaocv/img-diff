@@ -99,7 +99,11 @@ pub fn init() -> Result<()> {
     if INIT_OK.load(Ordering::SeqCst) {
         Ok(())
     } else {
-        Err(CliError::new("decode_error", "libvips の初期化に失敗しました").into())
+        Err(CliError::new(
+            "decode_error",
+            "libvips の初期化に失敗しました（libvips ランタイムが見つかりません: 同梱 DLL を実行ファイルと同じ場所に置くか PATH に通してください）",
+        )
+        .into())
     }
 }
 
@@ -121,7 +125,13 @@ unsafe fn vips_error(ctx: &str) -> anyhow::Error {
             .into_owned()
     };
     unsafe { vips_error_clear() };
-    CliError::new("decode_error", format!("{ctx}: {}", msg.trim())).into()
+    // load 失敗は入力ファイル起因が大半 → 次アクションを添える（AI が自己修正できるように）。
+    let hint = if ctx == "load" {
+        "（対応形式か・ファイルが壊れていないか確認してください。HEIC/AVIF 等は未対応の場合あり）"
+    } else {
+        ""
+    };
+    CliError::new("decode_error", format!("{ctx}: {}{hint}", msg.trim())).into()
 }
 
 /// 1 ステップの vips 演算（in → out）を実行し、成功なら in を unref して out を返す。

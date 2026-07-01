@@ -135,8 +135,12 @@ pub fn run(args: ScanArgs, out: OutputFormat) -> Result<()> {
     // --json: 完全な Report をファイルへ。
     if let Some(path) = &args.json {
         let json = serde_json::to_string_pretty(&Report::Scan(report.clone()))?;
-        std::fs::write(path, json)
-            .map_err(|e| CliError::new("io_error", format!("JSON 書き出し失敗: {e}")))?;
+        std::fs::write(path, json).map_err(|e| {
+            CliError::new(
+                "io_error",
+                format!("JSON 書き出し失敗: {e}（出力先ディレクトリが存在するか確認してください）"),
+            )
+        })?;
         eprintln!("完全レポートを書き出しました: {}", path.display());
     }
 

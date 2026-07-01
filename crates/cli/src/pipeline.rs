@@ -26,8 +26,12 @@ pub struct DecodeHash {
 /// ファイルを読み、SPEC §1 の正規化（デコード→白平坦化）と各ハッシュを計算する。
 /// 読み込み失敗は `not_found`、デコード失敗は `decode_error`（decode 側）でコード付与。
 pub fn decode_and_hash(path: &Path) -> Result<DecodeHash> {
-    let bytes = std::fs::read(path)
-        .map_err(|e| CliError::new("not_found", format!("{}: {e}", path.display())))?;
+    let bytes = std::fs::read(path).map_err(|e| {
+        CliError::new(
+            "not_found",
+            format!("{}: {e}（パスが正しいか確認してください）", path.display()),
+        )
+    })?;
     let sha256 = util::sha256_hex(&bytes);
     let mut dec = decode::decode_canonical(path)?;
     preprocess::flatten_on_white(&mut dec.rgba);
