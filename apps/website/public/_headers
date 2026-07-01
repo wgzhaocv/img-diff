@@ -4,3 +4,7 @@
 /*
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Embedder-Policy: require-corp
+
+# インストーラは UTF-8 テキストとして配信(irm が正しく復号し日本語が化けないように)。
+/install.ps1
+  Content-Type: text/plain; charset=utf-8

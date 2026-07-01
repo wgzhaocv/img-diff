@@ -4,6 +4,9 @@
   // cross-origin isolation を有効化する。
   "name": "img-diff-web",
   "compatibility_date": "2026-07-01",
+  // カスタムドメイン。前端も CLI インストーラ(/install.ps1)も同じ imgdiff.wgzhao.me で配信する。
+  // wgzhao.me は同じ CF アカウントの zone である必要がある。
+  "routes": [{ "pattern": "imgdiff.wgzhao.me", "custom_domain": true }],
   "assets": {
     // vp build（Vite）の出力先。public/* もここへコピーされる（_headers 含む）。
     "directory": "./dist",
