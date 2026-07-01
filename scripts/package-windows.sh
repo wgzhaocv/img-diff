@@ -55,4 +55,16 @@ WIN_BUNDLE="$(cygpath -w "$PWD/$BUNDLE")"
 WIN_ZIP="$(cygpath -w "$PWD/$OUT/$ZIP_NAME")"
 powershell.exe -NoProfile -Command "Compress-Archive -Path '$WIN_BUNDLE' -DestinationPath '$WIN_ZIP' -Force" >&2
 
+# manifest.json（release アセットとして同梱。`imgdiff update` が target→zip名+sha256 を引く）。
+SHA="$(sha256sum "$OUT/$ZIP_NAME" | awk '{print $1}')"
+cat > "$OUT/manifest.json" <<EOF
+{
+  "version": "$VERSION",
+  "targets": [
+    { "target": "x86_64-pc-windows-gnu", "asset": "$ZIP_NAME", "sha256": "$SHA" }
+  ]
+}
+EOF
+echo "manifest: $OUT/manifest.json (sha256 $SHA)" >&2
+
 echo "$OUT/$ZIP_NAME"

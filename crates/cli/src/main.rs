@@ -14,7 +14,9 @@ mod output;
 mod pipeline;
 mod scan;
 mod skill;
+mod update;
 mod util;
+mod version_check;
 
 use output::OutputFormat;
 
@@ -44,12 +46,19 @@ enum Cmd {
     Clean(clean::CleanArgs),
     /// AI 手册（skill）を stdout に出す（常設導入は skills.sh: npx skills add）
     Skill(skill::SkillArgs),
+    /// 最新版へ自己更新する（GitHub Releases から取得・sha256 検証・同梱 DLL ごと差し替え）
+    Update,
 }
 
 fn main() {
     let cli = Cli::parse();
+    // 前回 update で残った *.imgdiff-old を掃除（同梱パッケージのみ・best-effort・開発ビルドは無処理）。
+    update::cleanup_old();
     let out = cli.output.resolve();
     let json = out.is_json();
+    // scan/compare/clean を text で実行し成功したときだけ、更新通知を出す（1h クールダウン・fail-open）。
+    let notify_update =
+        !json && matches!(cli.command, Cmd::Scan(_) | Cmd::Compare(_) | Cmd::Clean(_));
 
     let result = run(cli.command, out);
 
@@ -67,6 +76,10 @@ fn main() {
             eprintln!("Error: {e:#}");
         }
         std::process::exit(1);
+    }
+
+    if notify_update {
+        version_check::maybe_notify();
     }
 }
 
@@ -86,5 +99,6 @@ fn run(command: Cmd, out: OutputFormat) -> Result<()> {
             clean::run(args, out)
         }
         Cmd::Skill(args) => skill::run(args, out),
+        Cmd::Update => update::run(),
     }
 }
