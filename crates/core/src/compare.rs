@@ -1,5 +1,16 @@
 //! 2 枚比較のスコア（`SPEC.md §3`）。いずれも寸法一致が前提。
 
+/// 白平坦化後 RGBA 2 枚の画素オフセット `i`（= p·4）で、R/G/B いずれかのチャンネル差が
+/// `> tolerance` か（= 差分画素か）を返す。`pixel_diff_ratio`（差分割合）と `diff::highlight`
+/// （品紅ハイライト）がこの 1 述語を共有し、両者が構造的に一致することを保証する
+/// （alpha は白平坦化済みのため除外）。SPEC.md §3。
+#[inline]
+pub(crate) fn pixel_differs(a: &[u8], b: &[u8], i: usize, tolerance: u8) -> bool {
+    a[i].abs_diff(b[i]) > tolerance
+        || a[i + 1].abs_diff(b[i + 1]) > tolerance
+        || a[i + 2].abs_diff(b[i + 2]) > tolerance
+}
+
 /// sRGB RGBA（白平坦化後）の 2 枚から、差分ピクセル割合 0..1 を返す。
 /// 各ピクセルの R/G/B いずれかのチャンネル差 `> tolerance` を差分とみなす（alpha は平坦化済みのため除外）。
 /// SPEC.md §3。
@@ -11,11 +22,7 @@ pub fn pixel_diff_ratio(a: &[u8], b: &[u8], tolerance: u8) -> f64 {
     }
     let mut diff = 0usize;
     for p in 0..pixels {
-        let i = p * 4;
-        let dr = a[i].abs_diff(b[i]);
-        let dg = a[i + 1].abs_diff(b[i + 1]);
-        let db = a[i + 2].abs_diff(b[i + 2]);
-        if dr > tolerance || dg > tolerance || db > tolerance {
+        if pixel_differs(a, b, p * 4, tolerance) {
             diff += 1;
         }
     }

@@ -1,13 +1,14 @@
 //! compare サブコマンド: 2 枚の画像を直接比較する（SPEC §3）。
 
+use crate::error::CliError;
 use crate::output::{self, OutputFormat};
 use crate::{decode, pipeline, util};
 use anyhow::Result;
 use clap::Args;
 use imgdiff_core::report::{
-    CompareResult, ImageRecord, Producer, Report, HASH_ALGO_VERSION, SCHEMA_VERSION,
+    AssetRef, CompareResult, ImageRecord, Producer, Report, HASH_ALGO_VERSION, SCHEMA_VERSION,
 };
-use imgdiff_core::{compare as score, hash, preprocess};
+use imgdiff_core::{compare as score, diff, hash, preprocess};
 use std::path::{Path, PathBuf};
 
 #[derive(Args)]
@@ -19,6 +20,9 @@ pub struct CompareArgs {
     /// ピクセル差の許容（各チャンネル差がこれ以下なら同一扱い。既定 0）
     #[arg(long, default_value_t = 0)]
     tolerance: u8,
+    /// 差分ハイライト PNG の出力先（省略時は生成しない。寸法一致時のみ有効）
+    #[arg(long, value_name = "PATH")]
+    diff: Option<PathBuf>,
 }
 
 pub fn run(args: CompareArgs, out: OutputFormat) -> Result<()> {
@@ -48,6 +52,29 @@ pub fn run(args: CompareArgs, out: OutputFormat) -> Result<()> {
         .zip(rec_b.phash.as_deref())
         .and_then(|(a, b)| Some(hash::hamming(hash::from_hex(a)?, hash::from_hex(b)?)));
 
+    // 差分ハイライト PNG（--diff 指定かつ比較可能時のみ生成）。
+    let diff_image = match (&args.diff, comparable) {
+        (Some(path), true) => Some(write_diff_png(
+            &rgba_a,
+            &rgba_b,
+            rec_a.width,
+            rec_a.height,
+            args.tolerance,
+            path,
+        )?),
+        (Some(path), false) => {
+            // 比較不能（寸法不一致）は成功のまま。警告のみ（json は comparable:false が理由を示す）。
+            if !out.is_json() {
+                eprintln!(
+                    "警告: 寸法が異なるため差分画像を生成しませんでした（{}）",
+                    path.display()
+                );
+            }
+            None
+        }
+        (None, _) => None,
+    };
+
     let result = CompareResult {
         schema_version: SCHEMA_VERSION,
         producer: Producer {
@@ -67,7 +94,7 @@ pub fn run(args: CompareArgs, out: OutputFormat) -> Result<()> {
         ssim,
         psnr,
         hamming_distance,
-        diff_image: None,
+        diff_image,
     };
 
     if out.is_json() {
@@ -76,6 +103,31 @@ pub fn run(args: CompareArgs, out: OutputFormat) -> Result<()> {
         print_text(&result);
     }
     Ok(())
+}
+
+/// 差分ハイライトを生成し PNG として path に書き出し、AssetRef::Path を返す（SPEC §4）。
+/// 拡張子に依らず PNG 固定。書き込み失敗は io_error で伝播する。
+fn write_diff_png(
+    rgba_a: &[u8],
+    rgba_b: &[u8],
+    width: u32,
+    height: u32,
+    tolerance: u8,
+    path: &Path,
+) -> Result<AssetRef> {
+    let buf = diff::highlight(rgba_a, rgba_b, tolerance);
+    image::save_buffer_with_format(
+        path,
+        &buf,
+        width,
+        height,
+        image::ColorType::Rgba8,
+        image::ImageFormat::Png,
+    )
+    .map_err(|e| CliError::new("io_error", format!("{}: {e}", path.display())))?;
+    Ok(AssetRef::Path {
+        path: path.display().to_string(),
+    })
 }
 
 /// 1 枚をデコード→白平坦化し、ImageRecord と平坦化後 RGBA を返す（共通処理は pipeline）。
@@ -121,5 +173,8 @@ fn print_text(r: &CompareResult) {
         println!("PSNR(dB): {}", fmt(r.psnr));
     } else {
         println!("比較不能（寸法が異なるためピクセル比較なし）");
+    }
+    if let Some(AssetRef::Path { path }) = &r.diff_image {
+        println!("差分画像: {path}");
     }
 }

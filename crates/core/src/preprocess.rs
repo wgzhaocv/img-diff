@@ -18,14 +18,17 @@ pub fn flatten_on_white(rgba: &mut [u8]) {
     }
 }
 
+/// 1 画素の Rec.601 グレー値（0..=255）。`to_gray_rec601` と `diff::highlight` が式を共有する。
+#[inline]
+pub fn gray_rec601_px(r: u8, g: u8, b: u8) -> u8 {
+    (0.299 * r as f64 + 0.587 * g as f64 + 0.114 * b as f64).round() as u8
+}
+
 /// RGBA を Rec.601 グレースケール（1 byte/px、行優先）に変換する。
 /// SSIM 等の全分解能グレースケール入力に使う（SPEC §1 手順 6 と同式・両端共有）。
 pub fn to_gray_rec601(rgba: &[u8]) -> Vec<u8> {
     rgba.chunks_exact(4)
-        .map(|px| {
-            let y = 0.299 * px[0] as f64 + 0.587 * px[1] as f64 + 0.114 * px[2] as f64;
-            y.round() as u8
-        })
+        .map(|px| gray_rec601_px(px[0], px[1], px[2]))
         .collect()
 }
 

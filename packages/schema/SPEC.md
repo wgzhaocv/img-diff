@@ -69,6 +69,12 @@ CLI は原生に、web は wasm にコンパイルして共有する。出力 JS
   MSE は pixelDiffRatio と同じ RGB バイト上で取る（**alpha は除外**、grayscale ではない）。
 - dimsEqual=false（= comparable=false）のとき、pixelEqual / pixelDiffRatio / ssim / psnr は
   すべて **null**（「比較不能」と「比較して不一致」を区別する）。
+- **diffImage**（任意の可視化・comparable 時のみ）: pixelDiffRatio と**同一の差分判定**
+  （同じ tolerance T）で、差分ピクセルを品紅 (255,0,255)・非差分を A の Rec.601 グレーを
+  白側へ淡化（round(gray·0.4 + 255·0.6)）した無彩色に塗った RGBA。品紅の面積が pixelDiffRatio に
+  対応し、「全体スコアでは分からない**どこが**違うか」を補う。CLI は `--diff <path>` で PNG を書き出し
+  `AssetRef{kind:"path"}` を返す（未指定時は省略）。可視化専用でグルーピングには使わないため
+  ビット決定性は要求しない。
 
 ## 4. 出力（--json / レポート）
 
@@ -77,7 +83,7 @@ CLI は原生に、web は wasm にコンパイルして共有する。出力 JS
 
 - `ScanReport`: `images[]` + `groups[]` + `skippedFiles[]` + `stats`。
   **決定性のため `images[]` と `skippedFiles[]` は path 昇順**（`groups[]` は §5 の通り最小メンバ path 昇順）。
-- `CompareResult`: `a` / `b` の `ImageRecord` + 各種スコア。比較不能時は §3 の通り null。
+- `CompareResult`: `a` / `b` の `ImageRecord` + 各種スコア + 任意の `diffImage`（§3）。比較不能時は §3 の通り null。
 
 `ImageRecord.path` は scan ではルートからの相対パス（`/` 区切り）、compare では入力で与えたパス。
 `AssetRef` は `{kind:"path"}` か `{kind:"dataUri"}`（CLI はパス、web は data URI）。

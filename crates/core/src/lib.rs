@@ -4,6 +4,7 @@
 
 pub mod cluster;
 pub mod compare;
+pub mod diff;
 pub mod hash;
 pub mod preprocess;
 pub mod report;
