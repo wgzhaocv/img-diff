@@ -8,11 +8,12 @@ type Props = {
   /** 操作ボタン等（任意）。 */
   children?: ReactNode;
   className?: string;
+  /** ドロップされたファイル（任意。未指定ならドロップは視覚のみ）。 */
+  onFiles?: (files: File[]) => void;
 };
 
-// 表示専用のドロップ領域（ドラッグ時のハイライトのみ実装）。
-// 実際のファイル取得は Phase 2/3 のオーケストレータで結線する。
-export function DropZone({ icon, title, hint, children, className }: Props) {
+// ドロップ領域。ドラッグ時のハイライト + onFiles でドロップファイルを渡す。
+export function DropZone({ icon, title, hint, children, className, onFiles }: Props) {
   const [over, setOver] = useState(false);
 
   return (
@@ -25,6 +26,8 @@ export function DropZone({ icon, title, hint, children, className }: Props) {
       onDrop={(e) => {
         e.preventDefault();
         setOver(false);
+        const files = Array.from(e.dataTransfer.files);
+        if (files.length > 0) onFiles?.(files);
       }}
       className={cn(
         "flex flex-col items-center justify-center gap-4 rounded-xl border-2 border-dashed",

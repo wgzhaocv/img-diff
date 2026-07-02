@@ -154,6 +154,21 @@ IndexedDB・権限の扱い）を定める。**キャッシュやストレージ
 - **shrink-on-load**: dHash は 9×8 で足りる → libvips/wasm-vips で JPEG を 1/8 デコード等、大幅短縮。
 - **wasm SIMD**: SSIM / pixelDiff に効く。N² の popcount は元々誤差なので無関係。
 
+### 7.1 Phase 2 実装メモ・計測課題（レビューで判明）
+
+- **pthread 過剰購読（要計測）**: 導入した wasm-vips 0.0.18 はスレッド版（SharedArrayBuffer 前提）。
+  `vips.concurrency(1)` は演算スレッドを 1 にするが Emscripten の pthread プールは別レイヤ。
+  N ワーカー × 各 vips の pthread で実スレッドが cores を超え得る（§4 の警告）。単一スレッド版が
+  この配布に無いため、Phase 3 で数百〜数千枚を実測し、最適プール本数（min(cores,8) の妥当性）を決める。
+- **メモリ（要計測）**: 各ワーカーが vips.wasm(5MB)+dyn libs を個別ロード → N 倍。将来 `WebAssembly.Module`
+  をメインで 1 度コンパイルし postMessage で共有する余地（再コンパイル削減）。
+- **shrink-on-load の橋渡し**: `workers/vips.ts::decodeCanonical` の `newFromBuffer(bytes, strOptions)` 第2引数
+  or `thumbnailBuffer` に差し替えるだけで縮小デコードに移行可（core 側無改修）。**導入時は native==wasm の
+  dHash 一致テスト（commit 30c482e）を必ず再実行**して一致を担保する。
+- **pixelSha256 二次パス（Phase 3）**: 1 パス目は `flatten_and_dhash`（全分解能）で dHash のみ算出、ファイルバイトは
+  transferable で worker へ譲渡済み。二次パスは衝突バケット（dHash 一致・メンバ≥2）のメンバだけ
+  `file.arrayBuffer()` で**再読込**して pixelSha256 を算出する（File ハンドルは残るので再読可能）。
+
 ## 8. 未決事項（要・合意）
 
 - ~~pixelSha256 の遅延計算~~ **【解決済み】** SPEC §2.1 で「dHash が他と一致する候補のみ算出」に確定。
