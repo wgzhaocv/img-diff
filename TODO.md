@@ -30,7 +30,22 @@
 - **web の install ページで OS を選ばせ対応スクリプトを出す**（CLI は GitHub Releases の zip、skill は `npx skills add github:wgzhaocv/img-diff`）。web 本体と一緒に。
 - Linux/Mac パッケージ + それらの release（Mac は Mac/CI）。自己更新チェーンは同機構でそのまま載る（target を manifest に足すだけ）。
 
-### 2. web（`crates/wasm` + parity は完了。次は React UI）
+### 2. web（Phase 0〜3b サムネまで完了・commit 済。scan は実用レベルで動作）
+
+**▶ 再開時の次アクション（compact 後はまずここを読む）**
+
+- 現状: scan は「フォルダ選択 → Worker 池で解码/哈希 → 重複グループ表示（exact/pixel/perceptual 切替・
+  閾値 debounce）→ 缩略图 → FS Access は IndexedDB キャッシュで再扫加速」まで動作。全経路で **web dHash==CLI**。
+- 次の選択肢（**ユーザー未確定**＝提示して選んでもらう）:
+  - **(A) Phase 3b 残り**: 実削除（**破壊的・web はゴミ箱不可＝恒久削除・要強確認・FS Access は自動検証不可**）/
+    中断再開 UI（jobs）/ 保存 handle 復用（queryPermission で再選択なし続扫）/ グループ仮想化 / shrink-on-load。
+  - **(B) Phase 4**: compare モード UI（並列 + pixel diff ハイライト + SSIM/PSNR）+ install ページ → CF デプロイ。
+- 手順: 実装 → **各 phase を simplify=4 エージェント並列レビュー**（codex rescue は**未インストール**＝
+  `npm i -g @openai/codex`+`/codex:setup` しない限り不可）→ 反映 → **`vp build`→`vp preview`** で検証
+  （`vp dev` は初回ワーカー依存の再最適化でスキャン state が飛ぶ）→ master 直接コミット。
+  agent-browser 検証は File[] 経路（input の webkitdirectory を eval で外して upload・`?r=` でキャッシュ回避）。
+  **FS Access のフォルダ選択はネイティブダイアログで agent-browser 不可 → その経路は要手動確認**。
+  ビルドに mingw PATH 不要（wasm pkg は `apps/website/src/wasm` にコミット済）。
 
 - **Phase 0 完了**: `crates/wasm`（wasm-bindgen）+ native==wasm parity 検証（上記「完成済み」参照）。
 - **Phase 1 完了（commit 済 7fc1b54）**: React 化 + UI 骨格。4 エージェントレビュー反映済み。
@@ -45,7 +60,7 @@
   （onerror で reject+補充）・中断ガード・shadcn Progress・4 エージェントレビュー反映済み。scan 実処理は動作、
   ただしグループ化・キャッシュ・削除は未（Phase 3）。**要計測（Phase 3）**: pthread 過剰購読・N×vips メモリ・
   shrink-on-load（DESIGN §7.1）。
-- **Phase 3 完了（commit 済・要 hash）**: scan オーケストレーション + グループ表示。runScan（1 パス目
+- **Phase 3 完了（commit 済 b481b79）**: scan オーケストレーション + グループ表示。runScan（1 パス目
   sha256+dHash → dHash 衝突バケットのみ 2 パス目 pixelSha256、SPEC §2.1）→ cluster_group（メイン/wasm）で
   厳密度別（exact/pixel/perceptual + 閾値・切替は再スキャン不要・閾値は debounce）→ DuplicateGroups（keeper
   「残す」・回収容量・チェッカー背景サムネ）。skipped 表示・同名 drop の取りこぼし回避・format 正規化。
@@ -58,7 +73,7 @@
   3 エージェントレビュー反映（F1 StrictMode の abortedRef 致命バグ・F2 per-file skip・F3 SPEC§2.1 presence
   再導出・F5 leak 防止・F6 失敗非キャッシュ・列挙並列化 ほか）。tsc/lint/build 緑、File[] 回帰は preview 検証済み。
   ※ **FS Access のフォルダ選択はネイティブダイアログのため agent-browser 自動検証不可 → 要 `vp dev` 手動確認**。
-- **Phase 3b サムネ 完了（commit 済・要 hash）**: worker がデコード時に ~256px webp サムネ生成（premultiply
+- **Phase 3b サムネ 完了（commit 済 ca2e88e）**: worker がデコード時に ~256px webp サムネ生成（premultiply
   で透過エッジ対策）→ File[] は thumbByPath / FS Access は IDB thumbs（putThumb は best-effort）。Thumb は
   thumb Blob→IDB→原 File の優先度。実機（File[]）でサムネ表示検証済み。2 エージェントレビュー反映（thumb 失敗を
   非致命に・putThumb を quota 耐性に・thumb を transfer）。**要計測（DESIGN §6 は許容）**: 全画像 eager encode /
