@@ -1,14 +1,21 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { Progress } from "@/components/ui/progress";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { ImageSlot } from "@/components/ImageSlot";
 import { CompareView } from "@/components/CompareView";
-import { compareFiles, type CompareOutcome } from "@/lib/compare";
+import { compareFiles, type CompareOutcome, type ComparePhase } from "@/lib/compare";
 import { HashPool } from "@/lib/workerPool";
 
 // compare は 2 枚だけなのでプールは 2 本で十分（scan の大規模プールとは別インスタンス）。
 const COMPARE_POOL_SIZE = 2;
+
+// フェーズ表示（「今なにをしているか」＋ 3 段の進捗）。UI.md 原則3: 派手なスピナーより線形バー + 等幅表記。
+const PHASE: Record<ComparePhase, { label: string; step: number; pct: number }> = {
+  decode: { label: "画像を読み込み中…", step: 1, pct: 30 },
+  score: { label: "スコアを計算中（SSIM / PSNR / 差分割合）…", step: 2, pct: 65 },
+  diff: { label: "差分ハイライトを生成中…", step: 3, pct: 90 },
+};
 
 type Status = "idle" | "comparing" | "done";
 
@@ -17,6 +24,7 @@ export function CompareScreen() {
   const [fileB, setFileB] = useState<File | null>(null);
   const [outcome, setOutcome] = useState<CompareOutcome | null>(null);
   const [status, setStatus] = useState<Status>("idle");
+  const [phase, setPhase] = useState<ComparePhase>("decode");
 
   const poolRef = useRef<HashPool | null>(null);
   const runningRef = useRef(false); // 二重起動防止（stale closure 回避のため ref）。
@@ -41,9 +49,12 @@ export function CompareScreen() {
     if (runningRef.current || abortedRef.current) return;
     runningRef.current = true;
     setStatus("comparing");
+    setPhase("decode");
     setOutcome(null);
     try {
-      const result = await compareFiles(a, b, getPool());
+      const result = await compareFiles(a, b, getPool(), (p) => {
+        if (!abortedRef.current) setPhase(p);
+      });
       if (abortedRef.current) return;
       setOutcome(result);
       setStatus("done");
@@ -82,13 +93,17 @@ export function CompareScreen() {
       </div>
 
       {comparing ? (
-        <div
-          className="flex items-center justify-center gap-2 text-sm text-muted-foreground"
-          role="status"
-          aria-live="polite"
-        >
-          <Loader2 className="size-4 animate-spin" />
-          比較中…
+        <div className="mx-auto max-w-md space-y-2" role="status" aria-live="polite">
+          <div className="flex items-center justify-between text-sm text-muted-foreground">
+            <span>{PHASE[phase].label}</span>
+            <span className="num">{PHASE[phase].step} / 3</span>
+          </div>
+          <Progress value={PHASE[phase].pct} />
+          {phase === "decode" ? (
+            <p className="text-xs text-muted-foreground">
+              ※ 初回はエンジン（wasm-vips）の初期化で少し時間がかかります。以降は速くなります。
+            </p>
+          ) : null}
         </div>
       ) : null}
 

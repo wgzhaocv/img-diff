@@ -3,22 +3,30 @@ import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
 import { Logo } from "@/components/Logo";
 import { ModeTabs } from "@/components/ModeTabs";
-import { useHashView } from "@/lib/router";
+import { useRoute, type View } from "@/lib/router";
 import { useTheme } from "@/lib/theme";
 import { ScanScreen } from "@/screens/ScanScreen";
 import { CompareScreen } from "@/screens/CompareScreen";
 import { InstallScreen } from "@/screens/InstallScreen";
 
 export function App() {
-  const { view, navigate } = useHashView();
+  const { view, navigate } = useRoute();
   const { theme, toggle } = useTheme();
+
+  // <a> の通常左クリックを SPA ナビにする（修飾キー/中クリックは既定＝別タブで開く等を残す）。
+  const onNavClick = (next: View) => (e: React.MouseEvent) => {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    navigate(next);
+  };
 
   return (
     <div className="flex min-h-screen flex-col">
       <header className="sticky top-0 z-20 border-b bg-background">
         <div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-4 sm:px-6">
           <a
-            href="#/scan"
+            href="/scan"
+            onClick={onNavClick("scan")}
             className="flex items-center gap-2 font-semibold tracking-tight text-foreground hover:no-underline"
           >
             <Logo className="size-6" />
@@ -30,7 +38,8 @@ export function App() {
           <div className="ml-auto flex items-center gap-1">
             <Button variant="ghost" size="sm" asChild>
               <a
-                href="#/install"
+                href="/install"
+                onClick={onNavClick("install")}
                 aria-current={view === "install" ? "page" : undefined}
                 className="aria-[current=page]:bg-secondary aria-[current=page]:text-foreground"
               >
@@ -54,10 +63,19 @@ export function App() {
         </div>
       </header>
 
+      {/* 3 画面は常にマウントしたまま、非アクティブを hidden（display:none）で隠す。
+          → タブ切替でスキャン結果 / 比較結果 / 選択ファイル / ワーカープールが消えない（状態保持）。
+          プールは各画面が遅延生成するので、使っていないタブは軽いまま。 */}
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-10 sm:px-6">
-        {view === "scan" && <ScanScreen />}
-        {view === "compare" && <CompareScreen />}
-        {view === "install" && <InstallScreen />}
+        <div hidden={view !== "scan"}>
+          <ScanScreen />
+        </div>
+        <div hidden={view !== "compare"}>
+          <CompareScreen />
+        </div>
+        <div hidden={view !== "install"}>
+          <InstallScreen />
+        </div>
       </main>
 
       <footer className="border-t">

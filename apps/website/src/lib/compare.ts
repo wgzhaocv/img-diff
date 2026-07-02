@@ -12,6 +12,17 @@ import { normalizeFormat } from "@/lib/scan";
 /// tolerance（各チャンネル差の許容）。CLI compare の既定と揃える。今は UI に露出しない。
 const TOLERANCE = 0;
 
+/// 比較の進行フェーズ（UI で「今なにをしているか」を出すため）。
+/// decode=2 枚のデコード（初回はワーカーごとの wasm-vips 初期化コミ・ここが一番重い）、
+/// score=SSIM/PSNR/差分割合、diff=差分ハイライト生成。
+export type ComparePhase = "decode" | "score" | "diff";
+
+/// score/diff はメインスレッドで同期的に走り UI を一瞬 block する。実行前に 1 フレーム譲って
+/// フェーズ表示を先に描かせる（さもないとラベルが更新される前に固まって見える）。
+function yieldToPaint(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 /// 比較対象 1 枚のメタ（表示用。ImageRecord の compare で意味を持つ部分集合）。
 export type CompareImageMeta = {
   name: string;
@@ -69,12 +80,14 @@ function toMeta(file: File, d: DecodeResult): CompareImageMeta {
   };
 }
 
-/// 2 枚のファイルを比較する。
+/// 2 枚のファイルを比較する。onProgress で「今どのフェーズか」を通知する（UI の進捗表示用）。
 export async function compareFiles(
   fileA: File,
   fileB: File,
   pool: HashPool,
+  onProgress?: (phase: ComparePhase) => void,
 ): Promise<CompareOutcome> {
+  onProgress?.("decode");
   const [da, db] = await Promise.all([decodeOne(pool, fileA), decodeOne(pool, fileB)]);
 
   const shaEqual = da.sha256 === db.sha256;
@@ -89,12 +102,16 @@ export async function compareFiles(
 
   // 比較不能（寸法不一致）時は数値は null（SPEC §3）。「比較不能」と「比較して不一致」を区別する。
   if (dimsEqual) {
+    onProgress?.("score");
+    await yieldToPaint(); // "スコア計算中" を描いてからブロッキング計算に入る。
     const scores = await compareScores(da.rgba, db.rgba, da.width, da.height, TOLERANCE);
     pixelDiffRatio = scores.pixelDiffRatio;
     ssim = scores.ssim;
     psnr = scores.psnr;
     // tolerance=0 では「差分ピクセル 0」＝「白平坦化 RGBA のバイト完全一致」＝ SPEC の pixelEqual。
     pixelEqual = pixelDiffRatio === 0;
+    onProgress?.("diff");
+    await yieldToPaint();
     // diff_highlight は wasm メモリからコピー済みの新 Uint8Array（非 SAB）を返す → そのまま保持。
     const rgba = await diffHighlight(da.rgba, db.rgba, TOLERANCE);
     diff = { width: da.width, height: da.height, rgba };

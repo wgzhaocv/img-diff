@@ -1,30 +1,32 @@
 import { useCallback, useEffect, useState } from "react";
 
-// 依存なしの最小ハッシュルータ。scan / compare / install の 3 画面のみ。
-// SPA（Cloudflare Workers Static Assets の single-page-application）と相性が良く、
-// 「速さがブランド」（UI.md §3）の方針で react-router 等は入れない。
+// 依存なしの最小ルータ。scan / compare / install の 3 画面のみ。History API（クリーンな
+// パス /compare 等・`#` なし）を使う。Cloudflare Workers Static Assets の
+// not_found_handling="single-page-application" が未知パスに index.html を返すので、
+// 直リンク（/compare をリロード）も成立する。「速さがブランド」（UI.md §3）で react-router は入れない。
 
 export type View = "scan" | "compare" | "install";
 
 const VIEWS: readonly View[] = ["scan", "compare", "install"];
 
-function parseHash(): View {
-  const raw = window.location.hash.replace(/^#\/?/, "");
-  return (VIEWS as readonly string[]).includes(raw) ? (raw as View) : "scan";
+function parsePath(): View {
+  const seg = window.location.pathname.replace(/^\/+/, "").split("/")[0];
+  return (VIEWS as readonly string[]).includes(seg) ? (seg as View) : "scan";
 }
 
-/// 現在の画面とナビゲート関数を返す。ハッシュ変更（戻る/進む含む）に追従する。
-export function useHashView(): { view: View; navigate: (view: View) => void } {
-  const [view, setView] = useState<View>(parseHash);
+/// 現在の画面とナビゲート関数を返す。戻る/進む（popstate）に追従する。
+export function useRoute(): { view: View; navigate: (view: View) => void } {
+  const [view, setView] = useState<View>(parsePath);
 
   useEffect(() => {
-    const onChange = () => setView(parseHash());
-    window.addEventListener("hashchange", onChange);
-    return () => window.removeEventListener("hashchange", onChange);
+    const onPop = () => setView(parsePath());
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
   }, []);
 
   const navigate = useCallback((next: View) => {
-    window.location.hash = `#/${next}`;
+    if (parsePath() !== next) window.history.pushState(null, "", `/${next}`);
+    setView(next);
   }, []);
 
   return { view, navigate };
