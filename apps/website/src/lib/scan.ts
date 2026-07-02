@@ -31,7 +31,9 @@ export function isImageFile(name: string): boolean {
   return IMAGE_EXTS.has(extOf(name));
 }
 
-function normalizeFormat(path: string): string {
+/// 名前/パスの拡張子を CLI `util.rs::normalize_ext` と揃えた format 名にする（jpg→jpeg 等）。
+/// worker は libvips のローダ名を返さないため、両端で ImageRecord.format を一致させる近似として使う。
+export function normalizeFormat(path: string): string {
   const ext = extOf(path);
   return FORMAT_ALIAS[ext] ?? ext;
 }
