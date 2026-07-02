@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { FolderOpen, Layers, Loader2, ScanLine, ShieldCheck, Trash2 } from "lucide-react";
-import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,18 +8,10 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DropZone } from "@/components/DropZone";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { DuplicateGroups } from "@/components/DuplicateGroups";
-import { runScan, scanFolder, type ScanProgress, type ScanResult } from "@/lib/scan";
+import { STRICTNESS_LABEL, STRICTNESS_ORDER, type Strictness } from "@/lib/core";
 import { pickDirectory, supportsFileSystemAccess } from "@/lib/fsaccess";
-import {
-  clusterGroup,
-  STRICTNESS_LABEL,
-  STRICTNESS_ORDER,
-  type DupGroup,
-  type Strictness,
-} from "@/lib/core";
-import { defaultPoolSize, HashPool } from "@/lib/workerPool";
-
-const POOL_SIZE = defaultPoolSize();
+import { useScanStore } from "@/lib/stores/scanStore";
+import type { ScanProgress } from "@/lib/scan";
 
 const PHASE_LABEL: Record<ScanProgress["phase"], string> = {
   enumerating: "ファイルを列挙中…",
@@ -46,112 +37,32 @@ const FEATURES = [
   },
 ];
 
-type Status = "idle" | "scanning" | "done";
-
 export function ScanScreen() {
-  const [status, setStatus] = useState<Status>("idle");
-  const [progress, setProgress] = useState<ScanProgress>({ phase: "hash", processed: 0, total: 0 });
-  const [scan, setScan] = useState<ScanResult | null>(null);
-  const [strictness, setStrictness] = useState<Strictness>("exact");
-  const [threshold, setThreshold] = useState(10);
-  const [debouncedThreshold, setDebouncedThreshold] = useState(10);
-  const [groups, setGroups] = useState<DupGroup[]>([]);
-  const [elapsedMs, setElapsedMs] = useState(0);
-
-  const poolRef = useRef<HashPool | null>(null);
+  const {
+    status,
+    progress,
+    result,
+    elapsedMs,
+    strictness,
+    threshold,
+    setStrictness,
+    setThreshold,
+    runFiles,
+    runFolder,
+  } = useScanStore();
+  const [thresholdInput, setThresholdInput] = useState(threshold);
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const runningRef = useRef(false); // 走行中の二重起動を防ぐ（stale closure 回避のため ref）。
-  const abortedRef = useRef(false); // アンマウント後に setState/toast しないためのフラグ。
 
   // フォルダ選択にする（webkitdirectory は JSX 型に無いので属性で付与）。
   useEffect(() => {
     inputRef.current?.setAttribute("webkitdirectory", "");
   }, []);
 
-  // マウントで abort フラグを戻し（StrictMode の mount→cleanup→mount で true のまま固定されるのを防ぐ）、
-  // アンマウントでワーカーを解放（走行中の Promise は terminate が reject する）。
+  // しきい値は連打で O(N²) の perceptual クラスタを毎回走らせないようデバウンスしてストアへ確定（切替は即時）。
   useEffect(() => {
-    abortedRef.current = false;
-    return () => {
-      abortedRef.current = true;
-      poolRef.current?.terminate();
-      poolRef.current = null;
-    };
-  }, []);
-
-  // しきい値は連打で O(N²) の perceptual クラスタを毎回走らせないようデバウンス（切替は即時）。
-  useEffect(() => {
-    const t = setTimeout(() => setDebouncedThreshold(threshold), 250);
+    const t = setTimeout(() => setThreshold(thresholdInput), 250);
     return () => clearTimeout(t);
-  }, [threshold]);
-
-  // scan 完了後、strictness/threshold に応じてクラスタリング（core）。切替は再スキャン不要。
-  useEffect(() => {
-    if (!scan) return;
-    let cancelled = false;
-    clusterGroup(
-      scan.images,
-      strictness,
-      strictness === "perceptual" ? debouncedThreshold : undefined,
-    )
-      .then((g) => {
-        if (!cancelled) setGroups(g);
-      })
-      .catch((e: unknown) => {
-        if (!cancelled) toast.error("グループ化に失敗しました", { description: String(e) });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [scan, strictness, debouncedThreshold]);
-
-  function getPool(): HashPool {
-    if (!poolRef.current) poolRef.current = new HashPool(POOL_SIZE);
-    return poolRef.current;
-  }
-
-  const onProgress = (p: ScanProgress) => {
-    if (!abortedRef.current) setProgress(p);
-  };
-
-  // スキャン実行の共通ラッパ（状態遷移・二重起動防止・中断後始末・計測）。scan 本体は doScan に委譲。
-  async function runIndex(doScan: () => Promise<ScanResult>): Promise<void> {
-    // 走行中の再起動、およびアンマウント後（ダイアログ跨ぎ等）に解決した経路は無視（プール復活リーク防止）。
-    if (runningRef.current || abortedRef.current) return;
-    runningRef.current = true;
-    setStatus("scanning");
-    setScan(null);
-    setGroups([]);
-    setProgress({ phase: "hash", processed: 0, total: 0 });
-    const start = performance.now();
-    try {
-      const result = await doScan();
-      if (abortedRef.current) return;
-      if (result.images.length === 0) {
-        toast.info("対象の画像が見つかりませんでした", {
-          description: "jpg / png / webp / heic / avif / svg などを含むフォルダを選んでください。",
-        });
-        setStatus("idle");
-        return;
-      }
-      setScan(result);
-      setElapsedMs(Math.round(performance.now() - start));
-      setStatus("done");
-    } catch (e) {
-      if (abortedRef.current) return;
-      toast.error("スキャンに失敗しました", {
-        description: e instanceof Error ? e.message : String(e),
-      });
-      setStatus("idle");
-    } finally {
-      runningRef.current = false;
-    }
-  }
-
-  // ドロップ / フォールバック input の File[]（キャッシュ・再開なし・DESIGN §6）。
-  function handleFiles(files: File[]): void {
-    void runIndex(() => runScan(files, getPool(), POOL_SIZE, onProgress));
-  }
+  }, [thresholdInput, setThreshold]);
 
   // 「フォルダを選ぶ」: Chromium は FS Access（永続ハンドル + IndexedDB キャッシュ）。他は input フォールバック。
   async function handlePick(): Promise<void> {
@@ -160,14 +71,13 @@ export function ScanScreen() {
       return;
     }
     const handle = await pickDirectory(); // ユーザー操作内で呼ぶ（transient activation）。
-    if (!handle) return;
-    void runIndex(() => scanFolder(handle, getPool(), POOL_SIZE, onProgress));
+    if (handle) void runFolder(handle);
   }
 
   function onInputChange(e: React.ChangeEvent<HTMLInputElement>): void {
     const files = Array.from(e.currentTarget.files ?? []);
     e.currentTarget.value = ""; // 同じフォルダを再選択できるように。
-    if (files.length > 0) handleFiles(files);
+    if (files.length > 0) void runFiles(files);
   }
 
   const scanning = status === "scanning";
@@ -193,7 +103,7 @@ export function ScanScreen() {
         icon={<FolderOpen className="size-6" />}
         title="フォルダをドラッグ、または選択"
         hint="フォルダは「選ぶ」ボタンで（Chromium 系ブラウザ）。画像ファイルはドラッグ＆ドロップも可。"
-        onFiles={handleFiles}
+        onFiles={(files) => void runFiles(files)}
       >
         <Button onClick={() => void handlePick()} disabled={scanning} className="gap-1.5">
           {scanning ? (
@@ -217,7 +127,7 @@ export function ScanScreen() {
         </div>
       ) : null}
 
-      {status === "done" && scan ? (
+      {status === "done" && result ? (
         <div className="space-y-6">
           <div className="flex flex-wrap items-center gap-3">
             <Tabs value={strictness} onValueChange={(v) => setStrictness(v as Strictness)}>
@@ -236,31 +146,25 @@ export function ScanScreen() {
                   type="number"
                   min={0}
                   max={64}
-                  value={threshold}
+                  value={thresholdInput}
                   onChange={(e) =>
-                    setThreshold(Math.min(64, Math.max(0, Number(e.currentTarget.value) || 0)))
+                    setThresholdInput(Math.min(64, Math.max(0, Number(e.currentTarget.value) || 0)))
                   }
                   className="num w-16 rounded-md border border-input bg-card px-2 py-1 text-foreground"
                 />
               </label>
             ) : null}
             <span className="ml-auto text-sm text-muted-foreground">
-              {scan.skipped.length > 0 ? (
+              {result.skipped.length > 0 ? (
                 <>
-                  スキップ <span className="num text-warning">{scan.skipped.length}</span> ·{" "}
+                  スキップ <span className="num text-warning">{result.skipped.length}</span> ·{" "}
                 </>
               ) : null}
               所要 <span className="num">{elapsedMs}</span> ms · 削除は Phase 3b
             </span>
           </div>
 
-          <DuplicateGroups
-            groups={groups}
-            images={scan.images}
-            fileByPath={scan.fileByPath}
-            thumbByPath={scan.thumbByPath}
-            rootId={scan.rootId}
-          />
+          <DuplicateGroups />
         </div>
       ) : null}
 

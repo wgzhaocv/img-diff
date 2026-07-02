@@ -6,20 +6,18 @@ import { Thumb } from "@/components/Thumb";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/format";
 import { STRICTNESS_LABEL, type DupGroup, type ImageRecord } from "@/lib/core";
+import { useScanStore } from "@/lib/stores/scanStore";
 
-export function DuplicateGroups({
-  groups,
-  images,
-  fileByPath,
-  thumbByPath,
-  rootId,
-}: {
-  groups: DupGroup[];
-  images: ImageRecord[];
-  fileByPath: Map<string, File>;
-  thumbByPath?: Map<string, Blob>;
-  rootId?: string;
-}) {
+// 表示データ（結果・グループ）はストアから直接読む（画面からの props 経由の受け渡しを避ける）。
+export function DuplicateGroups() {
+  const result = useScanStore((s) => s.result);
+  const groups = useScanStore((s) => s.groups);
+
+  const images = result?.images ?? [];
+  const fileByPath = result?.fileByPath;
+  const thumbByPath = result?.thumbByPath;
+  const rootId = result?.rootId;
+
   const imageByPath = useMemo(() => new Map(images.map((r) => [r.path, r])), [images]);
   const { duplicates, reclaimable } = useMemo(
     () => ({
@@ -84,7 +82,7 @@ function GroupCard({
 }: {
   group: DupGroup;
   imageByPath: Map<string, ImageRecord>;
-  fileByPath: Map<string, File>;
+  fileByPath?: Map<string, File>;
   thumbByPath?: Map<string, Blob>;
   rootId?: string;
 }) {
@@ -119,7 +117,7 @@ function GroupCard({
             <figure key={path} className="space-y-1">
               <div className="relative">
                 <Thumb
-                  file={fileByPath.get(path)}
+                  file={fileByPath?.get(path)}
                   thumb={thumbByPath?.get(path)}
                   rootId={rootId}
                   path={path}
