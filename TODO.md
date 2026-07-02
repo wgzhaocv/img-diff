@@ -34,8 +34,11 @@
 
 **▶ 再開時の次アクション（compact 後はまずここを読む）**
 
-- 現状: scan 実用可。**compare（2枚比較）も完了（Phase 4a・commit 8ca0b62）**＝並べ / 境界スライダ /
-  差分ハイライト(canvas) + SSIM/PSNR/差分割合/ハミングを等幅表示。全経路で **web dHash==CLI**。
+- 現状: scan + **compare（2枚比較）完了・本番デプロイ済**（imgdiff.wgzhao.me で稼働）。compare=並べ /
+  境界スライダ / 差分ハイライト(canvas) + SSIM/PSNR/差分割合/ハミングを等幅表示 + 段階進捗。全経路で **web dHash==CLI**。
+  **ライブラリ化済**（ユーザー指摘「手搓するな」）: ルーティング=**react-router v8**（`#` なしクリーンパス）、
+  状態=**zustand**（`src/lib/stores/*`・ルート跨ぎ保持・props ドリリング解消）、スライダ=**react-compare-slider**。
+  catalog の vite-plus/vite は **0.2.2 固定**（`latest` 割れの型二重定義を回避）。
   ※ compare の worker/DOM 結線は agent-browser 不可環境のため **要 `vp dev` 手動確認**（型/lint/build は緑）。
 - 次の選択肢（**ユーザー未確定**＝提示して選んでもらう）:
   - **(A) Phase 4b**: install ページ（OS 選択で CLI zip / install.ps1 の irm|iex / `npx skills add` を出し分け）
