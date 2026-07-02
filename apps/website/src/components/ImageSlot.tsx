@@ -45,12 +45,7 @@ export function ImageSlot({
         onFiles={pickFrom}
       >
         {input}
-        <Button
-          variant="secondary"
-          disabled={disabled}
-          onClick={() => inputRef.current?.click()}
-          className="gap-1.5"
-        >
+        <Button disabled={disabled} onClick={() => inputRef.current?.click()} className="gap-1.5">
           <ImagePlus className="size-4" />
           画像を選ぶ
         </Button>

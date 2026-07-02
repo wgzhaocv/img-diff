@@ -12,7 +12,8 @@ import type {
 
 let wasmReady: Promise<unknown> | null = null;
 function ensureWasm(): Promise<unknown> {
-  if (!wasmReady) wasmReady = init(wasmUrl);
+  // 単一オブジェクト形で渡す（位置引数は wasm-bindgen で deprecated 警告になる）。
+  if (!wasmReady) wasmReady = init({ module_or_path: wasmUrl });
   return wasmReady;
 }
 

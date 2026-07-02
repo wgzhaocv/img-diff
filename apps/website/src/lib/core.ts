@@ -23,7 +23,8 @@ export const STRICTNESS_LABEL: Record<Strictness, string> = {
 
 let ready: Promise<unknown> | null = null;
 function ensureCore(): Promise<unknown> {
-  if (!ready) ready = init(wasmUrl);
+  // 単一オブジェクト形で渡す（位置引数は wasm-bindgen で deprecated 警告になる）。
+  if (!ready) ready = init({ module_or_path: wasmUrl });
   return ready;
 }
 
