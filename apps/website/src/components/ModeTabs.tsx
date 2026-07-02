@@ -8,7 +8,7 @@ type Mode = { value: ModeValue; label: string; Icon: LucideIcon };
 
 // モード定義は 1 箇所（desktop / mobile の二重定義を避ける）。
 const MODES: Mode[] = [
-  { value: "scan", label: "フォルダ査重", Icon: ScanSearch },
+  { value: "scan", label: "重複を探す", Icon: ScanSearch },
   { value: "compare", label: "2枚を比較", Icon: Images },
 ];
 
