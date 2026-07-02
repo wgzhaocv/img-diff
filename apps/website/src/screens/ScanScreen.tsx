@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DropZone } from "@/components/DropZone";
 import { ScreenHeader } from "@/components/ScreenHeader";
@@ -140,19 +141,21 @@ export function ScanScreen() {
               </TabsList>
             </Tabs>
             {strictness === "perceptual" ? (
-              <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                しきい値
-                <input
-                  type="number"
+              <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                <span className="shrink-0">しきい値</span>
+                <Slider
+                  value={[thresholdInput]}
                   min={0}
-                  max={64}
-                  value={thresholdInput}
-                  onChange={(e) =>
-                    setThresholdInput(Math.min(64, Math.max(0, Number(e.currentTarget.value) || 0)))
-                  }
-                  className="num w-16 rounded-md border border-input bg-card px-2 py-1 text-foreground"
+                  max={32}
+                  step={1}
+                  onValueChange={(vals) => setThresholdInput(vals[0] ?? thresholdInput)}
+                  aria-label="知覚ハッシュのしきい値（ハミング距離）"
+                  className="w-40"
                 />
-              </label>
+                <span className="num w-8 text-right text-foreground" aria-hidden>
+                  {thresholdInput}
+                </span>
+              </div>
             ) : null}
             <span className="ml-auto text-sm text-muted-foreground">
               {result.skipped.length > 0 ? (
