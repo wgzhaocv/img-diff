@@ -43,7 +43,7 @@ export function getVips(): Promise<Vips> {
   return vipsPromise;
 }
 
-export type DecodedImage = { rgba: Uint8Array; width: number; height: number };
+export type DecodedImage = { rgba: Uint8Array<ArrayBuffer>; width: number; height: number };
 
 /// バイト列を sRGB RGBA（straight alpha・uchar・4band・行優先）へデコードする。SPEC §1 手順 1〜3。
 /// 手順は CLI `decode.rs::decode_canonical` と同順（autorot→sRGB→3band なら addalpha→cast uchar）。
@@ -72,8 +72,9 @@ export async function decodeCanonical(bytes: ArrayBuffer): Promise<DecodedImage>
     if (casted !== rgbaImg) trash.push(casted);
 
     const { width, height } = casted;
-    // writeToMemory は wasm ヒープからコピーした Uint8Array を返すので delete 後も有効。
-    const rgba = casted.writeToMemory();
+    // writeToMemory は vips（SharedArrayBuffer）ヒープ上の view を返し得る。非 SAB な ArrayBuffer へ
+    // コピーして返す（delete 後も安全・crypto.subtle など BufferSource を要求する API にも渡せる）。
+    const rgba = new Uint8Array(casted.writeToMemory());
     return { rgba, width, height };
   } finally {
     for (const im of trash) im.delete(); // wasm-vips のメモリは手動解放（leak 防止）。

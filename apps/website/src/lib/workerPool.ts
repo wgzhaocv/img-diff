@@ -1,7 +1,7 @@
-import type { HashRequest, HashResponse } from "@/lib/hashTypes";
+import type { WorkerRequest, WorkerResponse } from "@/lib/hashTypes";
 
-type Pending = { resolve: (r: HashResponse) => void; reject: (e: unknown) => void };
-type Waiting = { req: HashRequest; transfer: Transferable[] } & Pending;
+type Pending = { resolve: (r: WorkerResponse) => void; reject: (e: unknown) => void };
+type Waiting = { req: WorkerRequest; transfer: Transferable[] } & Pending;
 
 // wasm-vips + imgdiff-wasm を持つワーカーの固定プール（1 ワーカー = 同時 1 件）。
 // 各ワーカーは初回メッセージで wasm-vips / imgdiff-wasm を一度だけ初期化して使い回す。
@@ -24,7 +24,7 @@ export class HashPool {
     const worker = new Worker(new URL("../workers/hash.worker.ts", import.meta.url), {
       type: "module",
     });
-    worker.onmessage = (ev: MessageEvent<HashResponse>) => {
+    worker.onmessage = (ev: MessageEvent<WorkerResponse>) => {
       const p = this.pending.get(worker);
       this.pending.delete(worker);
       this.idle.push(worker);
@@ -61,13 +61,13 @@ export class HashPool {
     while (this.idle.length > 0 && this.queue.length > 0) {
       const worker = this.idle.pop()!;
       const task = this.queue.shift()!;
-      this.pending.set(worker, { resolve: task.resolve, reject: task.reject });
+      this.pending.set(worker, task); // Waiting は Pending を満たす（resolve/reject を保持）。
       worker.postMessage(task.req, task.transfer);
     }
   }
 
-  /// 1 件をハッシュする。空きワーカーが無ければキューに積む。
-  hash(req: HashRequest, transfer: Transferable[]): Promise<HashResponse> {
+  /// 1 件を処理する（op で hash / pixel）。空きワーカーが無ければキューに積む。
+  submit(req: WorkerRequest, transfer: Transferable[]): Promise<WorkerResponse> {
     return new Promise((resolve, reject) => {
       if (this.disposed) {
         reject(new Error("プールは破棄済みです"));

@@ -39,8 +39,22 @@
   シェル + ハッシュルータ + テーマトグル。`vp dev`（localhost:5173）で実機確認済（亮/暗・3画面・コンソール綺麗）。
   型/lint/整形（`vp check`）緑。UI スタックの約束は記憶 [[web-ui-stack-shadcn-tailwind]] 参照。
   ※ scan/compare の実処理は未結線（Phase 2/3）。ボタンは現状プレースホルダ（toast）。
-- **次（Phase 2）**: ワーカープール + wasm-vips デコード（DESIGN §4。シングルスレッド vips × N ワーカー・sha256 は crypto.subtle）。
-- Phase 3: IndexedDB + scan オーケストレーション（DESIGN §2/§3/§5。列挙−キャッシュ突合・逐次コミット・中断再開・pixelSha256 二次パス）。
+- **Phase 2 完了（commit 済 0705469）**: ワーカープール + wasm-vips デコード。Web Worker（wasm-vips
+  でデコード → imgdiff-wasm で dHash、sha256 は crypto.subtle）を固定プールで並列処理。**実機で web の
+  dHash が CLI と一致確認済み**（`workers/vips.ts::decodeCanonical` は CLI decode.rs と同順）。error 耐性
+  （onerror で reject+補充）・中断ガード・shadcn Progress・4 エージェントレビュー反映済み。scan 実処理は動作、
+  ただしグループ化・キャッシュ・削除は未（Phase 3）。**要計測（Phase 3）**: pthread 過剰購読・N×vips メモリ・
+  shrink-on-load（DESIGN §7.1）。
+- **Phase 3 完了（commit 済・要 hash）**: scan オーケストレーション + グループ表示。runScan（1 パス目
+  sha256+dHash → dHash 衝突バケットのみ 2 パス目 pixelSha256、SPEC §2.1）→ cluster_group（メイン/wasm）で
+  厳密度別（exact/pixel/perceptual + 閾値・切替は再スキャン不要・閾値は debounce）→ DuplicateGroups（keeper
+  「残す」・回収容量・チェッカー背景サムネ）。skipped 表示・同名 drop の取りこぼし回避・format 正規化。
+  **共有契約 `schema` の型（Strictness/ImageRecord/DupGroup）を website から再利用**（手書き重複を解消）。
+  **実機検証済み**（重複ペアがグループ化・3 モード切替・web dHash==CLI）。4 エージェントレビュー反映済み。
+- **次（Phase 3b＝堅牢性/永続レイヤ）**: IndexedDB キャッシュ（roots/jobs/hashes/thumbs・列挙−キャッシュ突合・
+  逐次コミット）+ File System Access（handle 契約へ・DESIGN §4）+ 中断再開（§5）+ ~256px サムネ生成/ストア（§6）
+  - 実削除（readwrite 権限・ゴミ箱）+ グループリスト仮想化 + shrink-on-load（1 パス目縮小デコード・§7.1）+
+    pixelSha256 の native==wasm byte 一致 golden。**runScan はここで 4 段（列挙→突合→残りだけ hash→cluster）に再構成**。
 - Phase 4: compare モード UI + install ページ → CF Workers Static Assets へデプロイ検証。
 - 設計は `apps/website/DESIGN.md`、ロジック正本は `packages/schema/SPEC.md`。
 

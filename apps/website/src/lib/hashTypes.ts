@@ -1,16 +1,11 @@
-// ワーカー ⇄ メイン のメッセージ契約（DESIGN §4）。Phase 2 は 1 パス目
-// （デコード + sha256 + dHash）のみ。pixelSha256 の二次パスは Phase 3。
+// ワーカー ⇄ メイン のメッセージ契約（DESIGN §4・web 内部プロトコル。索引レコードの型 ImageRecord は
+// 共有契約 `schema` 側が正本なのでそちらを import する）。
+// op="hash": 1 パス目（sha256 + dHash）。op="pixel": 2 パス目（pixelSha256・dHash 衝突バケットのみ）。
 
-export type HashRequest = {
-  id: number;
-  /** ルート相対パス（表示・キャッシュキー用）。 */
-  path: string;
-  /** ファイルバイト（postMessage の transferable として渡す）。 */
-  bytes: ArrayBuffer;
-};
+export type WorkerRequest = { op: "hash" | "pixel"; path: string; bytes: ArrayBuffer };
 
-export type HashResponse = {
-  id: number;
+export type HashResult = {
+  op: "hash";
   path: string;
   /** ファイル内容の SHA-256（16進）。 */
   sha256: string;
@@ -18,8 +13,16 @@ export type HashResponse = {
   phash: string | null;
   width: number;
   height: number;
-  /** バイト数。 */
   bytes: number;
-  /** デコード等の失敗理由（成功時は無し）。 */
   error?: string;
 };
+
+export type PixelResult = {
+  op: "pixel";
+  path: string;
+  /** 白平坦化後 RGBA の SHA-256（16進）。失敗時 null。 */
+  pixelSha256: string | null;
+  error?: string;
+};
+
+export type WorkerResponse = HashResult | PixelResult;
