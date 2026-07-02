@@ -9,7 +9,8 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DropZone } from "@/components/DropZone";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { DuplicateGroups } from "@/components/DuplicateGroups";
-import { runScan, type ScanProgress, type ScanResult } from "@/lib/scan";
+import { runScan, scanFolder, type ScanProgress, type ScanResult } from "@/lib/scan";
+import { pickDirectory, supportsFileSystemAccess } from "@/lib/fsaccess";
 import {
   clusterGroup,
   STRICTNESS_LABEL,
@@ -22,6 +23,7 @@ import { defaultPoolSize, HashPool } from "@/lib/workerPool";
 const POOL_SIZE = defaultPoolSize();
 
 const PHASE_LABEL: Record<ScanProgress["phase"], string> = {
+  enumerating: "ファイルを列挙中…",
   hash: "デコード + ハッシュ中…",
   pixel: "ピクセル照合中…",
 };
@@ -66,8 +68,10 @@ export function ScanScreen() {
     inputRef.current?.setAttribute("webkitdirectory", "");
   }, []);
 
-  // アンマウント時にワーカーを解放（走行中の Promise は terminate が reject する）。
+  // マウントで abort フラグを戻し（StrictMode の mount→cleanup→mount で true のまま固定されるのを防ぐ）、
+  // アンマウントでワーカーを解放（走行中の Promise は terminate が reject する）。
   useEffect(() => {
+    abortedRef.current = false;
     return () => {
       abortedRef.current = true;
       poolRef.current?.terminate();
@@ -106,8 +110,14 @@ export function ScanScreen() {
     return poolRef.current;
   }
 
-  async function handleFiles(files: File[]): Promise<void> {
-    if (runningRef.current) return; // 走行中の再スキャン/ドロップは無視。
+  const onProgress = (p: ScanProgress) => {
+    if (!abortedRef.current) setProgress(p);
+  };
+
+  // スキャン実行の共通ラッパ（状態遷移・二重起動防止・中断後始末・計測）。scan 本体は doScan に委譲。
+  async function runIndex(doScan: () => Promise<ScanResult>): Promise<void> {
+    // 走行中の再起動、およびアンマウント後（ダイアログ跨ぎ等）に解決した経路は無視（プール復活リーク防止）。
+    if (runningRef.current || abortedRef.current) return;
     runningRef.current = true;
     setStatus("scanning");
     setScan(null);
@@ -115,9 +125,7 @@ export function ScanScreen() {
     setProgress({ phase: "hash", processed: 0, total: 0 });
     const start = performance.now();
     try {
-      const result = await runScan(files, getPool(), POOL_SIZE, (p) => {
-        if (!abortedRef.current) setProgress(p);
-      });
+      const result = await doScan();
       if (abortedRef.current) return;
       if (result.images.length === 0) {
         toast.info("対象の画像が見つかりませんでした", {
@@ -140,10 +148,26 @@ export function ScanScreen() {
     }
   }
 
+  // ドロップ / フォールバック input の File[]（キャッシュ・再開なし・DESIGN §6）。
+  function handleFiles(files: File[]): void {
+    void runIndex(() => runScan(files, getPool(), POOL_SIZE, onProgress));
+  }
+
+  // 「フォルダを選ぶ」: Chromium は FS Access（永続ハンドル + IndexedDB キャッシュ）。他は input フォールバック。
+  async function handlePick(): Promise<void> {
+    if (!supportsFileSystemAccess()) {
+      inputRef.current?.click();
+      return;
+    }
+    const handle = await pickDirectory(); // ユーザー操作内で呼ぶ（transient activation）。
+    if (!handle) return;
+    void runIndex(() => scanFolder(handle, getPool(), POOL_SIZE, onProgress));
+  }
+
   function onInputChange(e: React.ChangeEvent<HTMLInputElement>): void {
     const files = Array.from(e.currentTarget.files ?? []);
     e.currentTarget.value = ""; // 同じフォルダを再選択できるように。
-    if (files.length > 0) void handleFiles(files);
+    if (files.length > 0) handleFiles(files);
   }
 
   const scanning = status === "scanning";
@@ -169,9 +193,9 @@ export function ScanScreen() {
         icon={<FolderOpen className="size-6" />}
         title="フォルダをドラッグ、または選択"
         hint="フォルダは「選ぶ」ボタンで（Chromium 系ブラウザ）。画像ファイルはドラッグ＆ドロップも可。"
-        onFiles={(files) => void handleFiles(files)}
+        onFiles={handleFiles}
       >
-        <Button onClick={() => inputRef.current?.click()} disabled={scanning} className="gap-1.5">
+        <Button onClick={() => void handlePick()} disabled={scanning} className="gap-1.5">
           {scanning ? (
             <Loader2 className="size-4 animate-spin" />
           ) : (
