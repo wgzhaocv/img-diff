@@ -34,17 +34,20 @@
 
 **▶ 再開時の次アクション（compact 後はまずここを読む）**
 
-- 現状: scan は「フォルダ選択 → Worker 池で解码/哈希 → 重複グループ表示（exact/pixel/perceptual 切替・
-  閾値 debounce）→ 缩略图 → FS Access は IndexedDB キャッシュで再扫加速」まで動作。全経路で **web dHash==CLI**。
+- 現状: scan 実用可。**compare（2枚比較）も完了（Phase 4a・commit 8ca0b62）**＝並べ / 境界スライダ /
+  差分ハイライト(canvas) + SSIM/PSNR/差分割合/ハミングを等幅表示。全経路で **web dHash==CLI**。
+  ※ compare の worker/DOM 結線は agent-browser 不可環境のため **要 `vp dev` 手動確認**（型/lint/build は緑）。
 - 次の選択肢（**ユーザー未確定**＝提示して選んでもらう）:
-  - **(A) Phase 3b 残り**: 実削除（**破壊的・web はゴミ箱不可＝恒久削除・要強確認・FS Access は自動検証不可**）/
+  - **(A) Phase 4b**: install ページ（OS 選択で CLI zip / install.ps1 の irm|iex / `npx skills add` を出し分け）
+    → CF Workers Static Assets デプロイ検証（imgdiff.wgzhao.me 本番・\_headers の COOP/COEP）。※対外・要ユーザー確認。
+  - **(B) Phase 3b 残り**: 実削除（**破壊的・web はゴミ箱不可＝恒久削除・要強確認・FS Access は自動検証不可**）/
     中断再開 UI（jobs）/ 保存 handle 復用（queryPermission で再選択なし続扫）/ グループ仮想化 / shrink-on-load。
-  - **(B) Phase 4**: compare モード UI（並列 + pixel diff ハイライト + SSIM/PSNR）+ install ページ → CF デプロイ。
 - 手順: 実装 → **各 phase を simplify=4 エージェント並列レビュー**（codex rescue は**未インストール**＝
-  `npm i -g @openai/codex`+`/codex:setup` しない限り不可）→ 反映 → **`vp build`→`vp preview`** で検証
-  （`vp dev` は初回ワーカー依存の再最適化でスキャン state が飛ぶ）→ master 直接コミット。
-  agent-browser 検証は File[] 経路（input の webkitdirectory を eval で外して upload・`?r=` でキャッシュ回避）。
-  **FS Access のフォルダ選択はネイティブダイアログで agent-browser 不可 → その経路は要手動確認**。
+  `npm i -g @openai/codex`+`/codex:setup` しない限り不可。※Phase 4a は Anthropic 側の session limit で
+  4 エージェント中 simplification のみ完走・他 3 は inline 代替でカバー）→ 反映 → **`vp build`→`vp preview`**
+  で検証（`vp dev` は初回ワーカー依存の再最適化でスキャン state が飛ぶ）→ master 直接コミット。
+  agent-browser 検証は File[] 経路のみ（input の webkitdirectory を eval で外して upload・`?r=` でキャッシュ回避）。
+  **FS Access のフォルダ選択・compare の worker 経路はネイティブ/実機依存で agent-browser 不可 → 要手動確認**。
   ビルドに mingw PATH 不要（wasm pkg は `apps/website/src/wasm` にコミット済）。
 
 - **Phase 0 完了**: `crates/wasm`（wasm-bindgen）+ native==wasm parity 検証（上記「完成済み」参照）。
@@ -81,7 +84,17 @@
 - **Phase 3b 残り**: 中断再開 UI（jobs ストア・「前回の続行」）+ 実削除（readwrite 権限・確認・removeEntry。
   web はゴミ箱不可＝恒久削除の確認 UI）+ 保存 handle 再利用（queryPermission/requestPermission で再選択なし再開）
   - グループ仮想化 + shrink-on-load（§7.1）+ pixelSha256 の native==wasm byte golden + キャッシュ GC/reconcile。
-- Phase 4: compare モード UI + install ページ → CF Workers Static Assets へデプロイ検証。
+- **Phase 4a 完了（commit 済 8ca0b62）**: compare（2 枚比較）。worker に op="decode" 追加（白平坦化後の
+  全分解能 RGBA を transfer で返す。hashOne/decodeOne は共通 `decodeFull` を op ごとに射影＝重複解消）→
+  主線程 core の `compareScores`/`diffHighlight`/`hammingHex`（CompareScores は getter 読取後に free）で
+  ペア演算。`lib/compare.ts`（sha/dims/hamming + dimsEqual 時に SSIM/PSNR/差分割合/差分RGBA。pixelEqual は
+  差分割合0で導出＝tolerance0 でバイト一致と同値）→ `CompareView`（総合判定 + 等幅メトリクス + 並べて/
+  境界スライダ/差分canvas）・`ImageSlot`（ドロップ/選択+プレビュー）・`useObjectUrl`。数値の正しさは
+  native==wasm の golden parity（crates/wasm）が既に保証。**`schema` の exports import を src へ**（値 import
+  `HASH_BITS` を解決。型は元々 src 参照）。simplify レビュー反映（decodeFull 一本化・pixelEqual 導出・
+  comparable 別名廃止・decodeOne 戻り型で二重ガード解消ほか）。型/lint/整形・build 緑。
+  ※ **worker/DOM 結線は agent-browser 不可のため `vp dev` で手動確認要**（メトリクス値・3 表示切替・差分描画）。
+- **Phase 4b（残り）**: install ページ（OS 選択で出し分け）+ CF Workers Static Assets デプロイ検証。
 - 設計は `apps/website/DESIGN.md`、ロジック正本は `packages/schema/SPEC.md`。
 
 ## ビルド/実行メモ（windows-gnu）
