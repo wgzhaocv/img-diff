@@ -51,10 +51,21 @@
   「残す」・回収容量・チェッカー背景サムネ）。skipped 表示・同名 drop の取りこぼし回避・format 正規化。
   **共有契約 `schema` の型（Strictness/ImageRecord/DupGroup）を website から再利用**（手書き重複を解消）。
   **実機検証済み**（重複ペアがグループ化・3 モード切替・web dHash==CLI）。4 エージェントレビュー反映済み。
-- **次（Phase 3b＝堅牢性/永続レイヤ）**: IndexedDB キャッシュ（roots/jobs/hashes/thumbs・列挙−キャッシュ突合・
-  逐次コミット）+ File System Access（handle 契約へ・DESIGN §4）+ 中断再開（§5）+ ~256px サムネ生成/ストア（§6）
-  - 実削除（readwrite 権限・ゴミ箱）+ グループリスト仮想化 + shrink-on-load（1 パス目縮小デコード・§7.1）+
-    pixelSha256 の native==wasm byte 一致 golden。**runScan はここで 4 段（列挙→突合→残りだけ hash→cluster）に再構成**。
+- **Phase 3b 基盤 完了（commit 済 d8201b2）**: File System Access + IndexedDB hashes キャッシュ。
+  `lib/db.ts`（idb・roots/jobs/hashes/thumbs スキーマ・逐次 putHash・storage.persist）、`lib/fsaccess.ts`
+  （showDirectoryPicker・isSameEntry で rootId 安定化・再帰列挙）、`lib/scan.ts::scanFolder`（列挙−突合→ミス分
+  だけ hash→pixelSha256、キャッシュ再利用）。runScan と 2 パス目を共通 seam `secondPassPixels` に統一。
+  3 エージェントレビュー反映（F1 StrictMode の abortedRef 致命バグ・F2 per-file skip・F3 SPEC§2.1 presence
+  再導出・F5 leak 防止・F6 失敗非キャッシュ・列挙並列化 ほか）。tsc/lint/build 緑、File[] 回帰は preview 検証済み。
+  ※ **FS Access のフォルダ選択はネイティブダイアログのため agent-browser 自動検証不可 → 要 `vp dev` 手動確認**。
+- **Phase 3b サムネ 完了（commit 済・要 hash）**: worker がデコード時に ~256px webp サムネ生成（premultiply
+  で透過エッジ対策）→ File[] は thumbByPath / FS Access は IDB thumbs（putThumb は best-effort）。Thumb は
+  thumb Blob→IDB→原 File の優先度。実機（File[]）でサムネ表示検証済み。2 エージェントレビュー反映（thumb 失敗を
+  非致命に・putThumb を quota 耐性に・thumb を transfer）。**要計測（DESIGN §6 は許容）**: 全画像 eager encode /
+  File[] の thumbByPath O(N) メモリ（表示は重複メンバのみ）。cache-hit 画像のサムネ backfill は未（file 表示で代替）。
+- **Phase 3b 残り**: 中断再開 UI（jobs ストア・「前回の続行」）+ 実削除（readwrite 権限・確認・removeEntry。
+  web はゴミ箱不可＝恒久削除の確認 UI）+ 保存 handle 再利用（queryPermission/requestPermission で再選択なし再開）
+  - グループ仮想化 + shrink-on-load（§7.1）+ pixelSha256 の native==wasm byte golden + キャッシュ GC/reconcile。
 - Phase 4: compare モード UI + install ページ → CF Workers Static Assets へデプロイ検証。
 - 設計は `apps/website/DESIGN.md`、ロジック正本は `packages/schema/SPEC.md`。
 

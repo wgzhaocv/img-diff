@@ -14,6 +14,8 @@ export type HashResult = {
   width: number;
   height: number;
   bytes: number;
+  /** ~256px の webp サムネ（DESIGN §6）。失敗時は無し。非 SAB（Blob 化のため）。 */
+  thumb?: Uint8Array<ArrayBuffer>;
   error?: string;
 };
 

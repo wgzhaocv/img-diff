@@ -11,10 +11,14 @@ export function DuplicateGroups({
   groups,
   images,
   fileByPath,
+  thumbByPath,
+  rootId,
 }: {
   groups: DupGroup[];
   images: ImageRecord[];
   fileByPath: Map<string, File>;
+  thumbByPath?: Map<string, Blob>;
+  rootId?: string;
 }) {
   const imageByPath = useMemo(() => new Map(images.map((r) => [r.path, r])), [images]);
   const { duplicates, reclaimable } = useMemo(
@@ -44,6 +48,8 @@ export function DuplicateGroups({
               group={group}
               imageByPath={imageByPath}
               fileByPath={fileByPath}
+              thumbByPath={thumbByPath}
+              rootId={rootId}
             />
           ))}
         </div>
@@ -73,10 +79,14 @@ function GroupCard({
   group,
   imageByPath,
   fileByPath,
+  thumbByPath,
+  rootId,
 }: {
   group: DupGroup;
   imageByPath: Map<string, ImageRecord>;
   fileByPath: Map<string, File>;
+  thumbByPath?: Map<string, Blob>;
+  rootId?: string;
 }) {
   // keeper（残す 1 枚）を先頭に。
   const ordered = [group.keeper, ...group.members.filter((m) => m !== group.keeper)];
@@ -110,6 +120,9 @@ function GroupCard({
               <div className="relative">
                 <Thumb
                   file={fileByPath.get(path)}
+                  thumb={thumbByPath?.get(path)}
+                  rootId={rootId}
+                  path={path}
                   alt={path}
                   className={cn("aspect-square", keeper && "ring-2 ring-primary")}
                 />

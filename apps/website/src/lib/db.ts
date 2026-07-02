@@ -104,7 +104,13 @@ export async function getThumb(rootId: string, path: string): Promise<Blob | und
   return (await db.get("thumbs", [rootId, path]))?.blob;
 }
 
+/// サムネは best-effort（表示補助であって正本でない）。quota 超過等で失敗してもスキャンは止めない
+/// （putHash＝再開の正本は別 txn で先にコミット済み）。DESIGN §6/§8。
 export async function putThumb(entry: ThumbEntry): Promise<void> {
-  const db = await getDB();
-  await db.put("thumbs", entry);
+  try {
+    const db = await getDB();
+    await db.put("thumbs", entry);
+  } catch {
+    // IDB quota 超過など。サムネは捨てて続行（表示は原 File にフォールバック）。
+  }
 }

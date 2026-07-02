@@ -1,7 +1,7 @@
 import type { ImageRecord } from "schema";
 import type { HashResult, PixelResult } from "@/lib/hashTypes";
 import { HashPool } from "@/lib/workerPool";
-import { getRootHashes, HASH_ALGO, putHash, type HashEntry } from "@/lib/db";
+import { getRootHashes, HASH_ALGO, putHash, putThumb, type HashEntry } from "@/lib/db";
 import { resolveRoot, walkImages } from "@/lib/fsaccess";
 
 // 対象拡張子（CLI の既定 ext と揃える）。
@@ -53,7 +53,13 @@ export type ScanResult = {
   skipped: SkippedFile[];
   /** FS Access 経由（キャッシュ有）のとき rootId。File[] フォールバックでは undefined。 */
   rootId?: string;
+  /** File[] 経路のサムネ（path → webp Blob・メモリ保持）。FS Access は IDB thumbs から引く。 */
+  thumbByPath?: Map<string, Blob>;
 };
+
+function webpBlob(bytes: Uint8Array<ArrayBuffer>): Blob {
+  return new Blob([bytes], { type: "image/webp" });
+}
 
 function entryToRecord(e: HashEntry): ImageRecord {
   return {
@@ -161,6 +167,7 @@ export async function runScan(
 
   const records: ImageRecord[] = [];
   const skipped: SkippedFile[] = [];
+  const thumbByPath = new Map<string, Blob>();
   let done = 0;
   onProgress({ phase: "hash", processed: 0, total: paths.length });
   await runBounded(paths, poolSize, async (path) => {
@@ -171,6 +178,7 @@ export async function runScan(
       skipped.push({ path, reason: res.error ?? "デコードに失敗しました" });
       return;
     }
+    if (res.thumb) thumbByPath.set(path, webpBlob(res.thumb));
     records.push({
       path,
       bytes: res.bytes,
@@ -193,7 +201,7 @@ export async function runScan(
 
   records.sort(byPath);
   skipped.sort(byPath);
-  return { images: records, fileByPath, skipped };
+  return { images: records, fileByPath, skipped, thumbByPath };
 }
 
 /// フォルダ（永続ハンドル）を索引する。FS Access + IndexedDB キャッシュ版（DESIGN §2/§3/§5）。
@@ -264,6 +272,7 @@ export async function scanFolder(
     await putHash(entry);
     entryByPath.set(path, entry);
     records.push(entryToRecord(entry));
+    if (res.thumb) await putThumb({ rootId: root.rootId, path, blob: webpBlob(res.thumb) });
   });
 
   // 2 パス目（共通 seam）。算出した pixelSha256 はキャッシュ（HashEntry）へ read-modify-write で反映。

@@ -21,7 +21,7 @@ async function hashOne(req: WorkerRequest): Promise<HashResult> {
   const sha256 = await sha256Hex(req.bytes);
   try {
     await ensureWasm();
-    const { rgba, width, height } = await decodeCanonical(req.bytes);
+    const { rgba, width, height, thumb } = await decodeCanonical(req.bytes, true);
     const phash = flatten_and_dhash(rgba, width, height); // rgba は in-place 平坦化される。
     return {
       op: "hash",
@@ -31,6 +31,7 @@ async function hashOne(req: WorkerRequest): Promise<HashResult> {
       width,
       height,
       bytes: req.bytes.byteLength,
+      thumb,
     };
   } catch (e) {
     return {
@@ -68,5 +69,7 @@ async function pixelOne(req: WorkerRequest): Promise<PixelResult> {
 self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
   const req = ev.data;
   const res = req.op === "pixel" ? await pixelOne(req) : await hashOne(req);
-  self.postMessage(res);
+  // thumb（非 SAB・独立バッファ）は transfer してコピーを避ける。
+  const transfer = res.op === "hash" && res.thumb ? [res.thumb.buffer] : [];
+  self.postMessage(res, transfer);
 };

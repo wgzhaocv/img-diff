@@ -8,7 +8,11 @@ type VipsImage = {
   colourspace(space: string): VipsImage;
   addalpha(): VipsImage;
   cast(format: string): VipsImage;
+  premultiply(): VipsImage;
+  unpremultiply(): VipsImage;
+  resize(scale: number): VipsImage;
   writeToMemory(): Uint8Array;
+  writeToBuffer(suffix: string): Uint8Array;
   readonly width: number;
   readonly height: number;
   readonly bands: number;
@@ -43,12 +47,25 @@ export function getVips(): Promise<Vips> {
   return vipsPromise;
 }
 
-export type DecodedImage = { rgba: Uint8Array<ArrayBuffer>; width: number; height: number };
+export type DecodedImage = {
+  rgba: Uint8Array<ArrayBuffer>;
+  width: number;
+  height: number;
+  /** wantThumb 指定時の ~256px サムネ（webp バイト・原比率）。DESIGN §6。 */
+  thumb?: Uint8Array<ArrayBuffer>;
+};
+
+/** サムネの最大辺（px）。DESIGN §6 の「~256px」。 */
+const THUMB_MAX = 256;
 
 /// バイト列を sRGB RGBA（straight alpha・uchar・4band・行優先）へデコードする。SPEC §1 手順 1〜3。
 /// 手順は CLI `decode.rs::decode_canonical` と同順（autorot→sRGB→3band なら addalpha→cast uchar）。
 /// bands が 3/4 以外は CLI 同様エラーにする（誤ハッシュを避け web/CLI 整合を保つ）。
-export async function decodeCanonical(bytes: ArrayBuffer): Promise<DecodedImage> {
+/// wantThumb 指定時は、デコード済み画像から ~256px の webp サムネも生成する（デコードのついで・DESIGN §6）。
+export async function decodeCanonical(
+  bytes: ArrayBuffer,
+  wantThumb = false,
+): Promise<DecodedImage> {
   const vips = await getVips();
   const trash: VipsImage[] = [];
   try {
@@ -72,10 +89,32 @@ export async function decodeCanonical(bytes: ArrayBuffer): Promise<DecodedImage>
     if (casted !== rgbaImg) trash.push(casted);
 
     const { width, height } = casted;
+
+    // サムネ（原比率で最大辺 256 に縮小・webp）。透過は premultiply→resize→unpremultiply でエッジの
+    // フリンジを防ぐ。dHash 用の 9x8 とは別物。生成失敗は**致命でない**（dHash は成功済み）ので握り潰し
+    // thumb 無しにする（表示は原 File / IDB にフォールバック）＝cosmetic な失敗で画像を dedup から落とさない。
+    let thumb: Uint8Array<ArrayBuffer> | undefined;
+    if (wantThumb) {
+      try {
+        const scale = Math.min(1, THUMB_MAX / Math.max(width, height));
+        const pm = casted.premultiply();
+        trash.push(pm);
+        const rs = pm.resize(scale);
+        trash.push(rs);
+        const um = rs.unpremultiply();
+        trash.push(um);
+        const uc = um.cast("uchar");
+        if (uc !== um) trash.push(uc);
+        thumb = new Uint8Array(uc.writeToBuffer(".webp[Q=80]"));
+      } catch {
+        thumb = undefined;
+      }
+    }
+
     // writeToMemory は vips（SharedArrayBuffer）ヒープ上の view を返し得る。非 SAB な ArrayBuffer へ
     // コピーして返す（delete 後も安全・crypto.subtle など BufferSource を要求する API にも渡せる）。
     const rgba = new Uint8Array(casted.writeToMemory());
-    return { rgba, width, height };
+    return { rgba, width, height, thumb };
   } finally {
     for (const im of trash) im.delete(); // wasm-vips のメモリは手動解放（leak 防止）。
   }

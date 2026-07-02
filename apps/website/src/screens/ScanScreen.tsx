@@ -254,7 +254,13 @@ export function ScanScreen() {
             </span>
           </div>
 
-          <DuplicateGroups groups={groups} images={scan.images} fileByPath={scan.fileByPath} />
+          <DuplicateGroups
+            groups={groups}
+            images={scan.images}
+            fileByPath={scan.fileByPath}
+            thumbByPath={scan.thumbByPath}
+            rootId={scan.rootId}
+          />
         </div>
       ) : null}
 
