@@ -34,7 +34,7 @@
 
 **▶ 再開時の次アクション（新しい chat はまずここを読む）**
 
-- **現状（すべて本番デプロイ済・最新 version `c736b4e7`・imgdiff.wgzhao.me 稼働）**:
+- **現状（すべて本番デプロイ済・最新 version `7db507e2`＝実削除込み・imgdiff.wgzhao.me 稼働）**:
   - **scan**（フォルダ重複検索）+ **compare**（2枚比較）が動作。全経路で **web dHash==CLI**。
   - compare = 並べて / 境界スライダ / 差分ハイライト(canvas) + SSIM/PSNR/差分割合/ハミング等幅表示 + 段階進捗（読込→計算→差分）。
   - **ライブラリ化済**（ユーザー指摘「何でも手搓するな」[[prefer-libraries-not-handrolled]]）:
@@ -45,9 +45,9 @@
   - catalog（root package.json）の **vite-plus/vite を `0.2.2` に固定**（`latest` が root/workspace で割れ、vite の
     Plugin 型が二重定義になり型崩れ→版固定で単一化。今後 `vp add` 後に型崩れしたらまずここを疑う）。
   - UI 文言は日本語（「査重」等の中国語は排除。scan タブ=「重複を探す」）。install ページは**未実装**（Phase 1 のプレースホルダ）。
-- **今やること = Phase 3b 残り。(A) 実削除は完了・commit 済（下の「### 3」参照）。★本番未デプロイ＝ユーザーが `vp dev` で
-  使い捨てフォルダ検証後に `wrangler deploy`★**。次は (B) 保存 handle 復用 + 中断再開、または (C) 低リスクの小物。
-  agent-browser で File[] 経路（削除ボタン無効化）は確認済み。FS Access 経路の実削除だけはネイティブ選択のため `vp dev` 手動確認。
+- **今やること = Phase 3b 残り。(A) 実削除は完了・commit 済・本番デプロイ済（version `7db507e2`・下の「### 3」参照）。**
+  次は (B) 保存 handle 復用 + 中断再開、または (C) 低リスクの小物。agent-browser で File[] 経路（削除ボタン無効化）は確認済み。
+  FS Access 経路の実削除は E2E 未検証のままユーザー指示で直接デプロイ（不具合が出たらこの経路を疑う）。
 - **検証環境（重要・更新）**: このセッションには **`agent-browser` skill が利用可能**（実ブラウザ駆動＝
   compare や FS Access もスクショ/操作で確認できる可能性あり。まず試す）。**`codex:setup`/`codex:rescue` skill も存在**
   （setup で CLI 準備を確認してから rescue を回す。以前「codex 未インストール」と記録したが skill 経路が来た）。
@@ -113,7 +113,7 @@
 
 ### 3. Phase 3b 残り（← (A) 実削除 完了・commit 済。次は (B) or (C)）
 
-**(A) 実削除 完了（commit 済・★本番未デプロイ＝ユーザー検証待ち★）**
+**(A) 実削除 完了（commit `362db82`・本番デプロイ済 version `7db507e2`・ユーザー指示で vp dev 検証を省き直接 deploy）**
 
 CLI `crates/cli/src/clean.rs`（SPEC §5.1）の安全モデルを踏襲。**破壊的・恒久（web にゴミ箱なし＝removeEntry は復元不可）**。
 対象は `autoDeletable=true`（exact/pixel）グループの keeper 以外のみ。perceptual は絶対に削除しない・keeper は必ず残す。
