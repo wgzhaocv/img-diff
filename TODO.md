@@ -45,9 +45,9 @@
   - catalog（root package.json）の **vite-plus/vite を `0.2.2` に固定**（`latest` が root/workspace で割れ、vite の
     Plugin 型が二重定義になり型崩れ→版固定で単一化。今後 `vp add` 後に型崩れしたらまずここを疑う）。
   - UI 文言は日本語（「査重」等の中国語は排除。scan タブ=「重複を探す」）。install ページは**未実装**（Phase 1 のプレースホルダ）。
-- **今やること = ユーザー選択済み: Phase 3b 残り。まず「実削除」から着手（下の「### 3. Phase 3b 残り」の実装計画に従う）。**
-  実削除は**破壊的・恒久（web にゴミ箱なし）**なので dry-run プレビュー + 強確認、**実装後すぐデプロイしない**
-  （ユーザーが `vp dev` で**使い捨てフォルダ**で検証してから）。着手直前に `fsaccess.ts` を読み終えた所で中断。
+- **今やること = Phase 3b 残り。(A) 実削除は完了・commit 済（下の「### 3」参照）。★本番未デプロイ＝ユーザーが `vp dev` で
+  使い捨てフォルダ検証後に `wrangler deploy`★**。次は (B) 保存 handle 復用 + 中断再開、または (C) 低リスクの小物。
+  agent-browser で File[] 経路（削除ボタン無効化）は確認済み。FS Access 経路の実削除だけはネイティブ選択のため `vp dev` 手動確認。
 - **検証環境（重要・更新）**: このセッションには **`agent-browser` skill が利用可能**（実ブラウザ駆動＝
   compare や FS Access もスクショ/操作で確認できる可能性あり。まず試す）。**`codex:setup`/`codex:rescue` skill も存在**
   （setup で CLI 準備を確認してから rescue を回す。以前「codex 未インストール」と記録したが skill 経路が来た）。
@@ -111,28 +111,37 @@
   （`https://imgdiff.wgzhao.me/install.ps1`）。Mac/Linux バイナリは未リリース→「build from source / 近日」表示は要ユーザー判断。
 - 設計は `apps/website/DESIGN.md`、ロジック正本は `packages/schema/SPEC.md`。
 
-### 3. Phase 3b 残り（← 今ここ。実削除から）
+### 3. Phase 3b 残り（← (A) 実削除 完了・commit 済。次は (B) or (C)）
 
-**(A) 実削除 — 最優先・破壊的・恒久（web にゴミ箱なし）・FS Access 経路のみ**
+**(A) 実削除 完了（commit 済・★本番未デプロイ＝ユーザー検証待ち★）**
 
-CLI `crates/cli/src/clean.rs`（SPEC §5.1）の安全モデルを踏襲: **dry-run プレビュー既定 + 明示確認**、
-対象は **`autoDeletable=true`（exact/pixel）グループの keeper 以外のみ**。perceptual は絶対に削除しない・keeper は必ず残す。
+CLI `crates/cli/src/clean.rs`（SPEC §5.1）の安全モデルを踏襲。**破壊的・恒久（web にゴミ箱なし＝removeEntry は復元不可）**。
+対象は `autoDeletable=true`（exact/pixel）グループの keeper 以外のみ。perceptual は絶対に削除しない・keeper は必ず残す。
 
-- **前提**: 削除には `FileSystemDirectoryHandle`（root）が要る。File[] 経路（ドラッグ/ドロップ・input）は永続 handle が
-  無く**削除不可**→ UI で無効化＋理由表示。scanStore に `rootHandle` を持たせる（現状 `runFolder(handle)` は handle を
-  捨てているので保持するよう変更。`result.rootId` はあるが handle 本体が要る）。
-- **権限**: 削除実行の**ユーザー操作（確認ボタンの click）内**で `rootHandle.requestPermission({mode:"readwrite"})`。
-  事前チェックは `queryPermission({mode:"readwrite"})`。scan は read のみ（段階要求・DESIGN §6.3）。
-- **removeEntry**: root 相対パス（`/` 区切り）を分解 → 末尾以外を `getDirectoryHandle` で辿り → 親で `removeEntry(name)`。
-  `fsaccess.ts` に `removeByPath(root, path)` ヘルパを追加（`walkImages` と同じ handle API）。
-- **フロー**: 「重複を N 件削除（M 回収）」ボタン（autoDeletable グループがあり rootHandle 有りのとき表示）→
-  **shadcn AlertDialog**（`components/ui/alert-dialog.tsx` を新規追加＝radix・unified import）で
-  「**永久削除・元に戻せません**」と対象件数/回収バイトを明示 → 確認 → readwrite 要求 → 各 non-keeper を removeEntry →
-  per-file 結果（成功/失敗）を集計 → **store とキャッシュを reconcile**（result.images/fileByPath/thumbByPath から削除・
-  `db.ts` に `deleteHash`/`deleteThumb` 追加して IDB からも消す）→ 再クラスタリング → toast で結果。
-- **安全**: 1 件失敗で全体を止めず per-file 記録（CLI 同様）。keeper・perceptual を絶対に触らないことをコードとテストで担保。
-  removeByPath はパス解決を防御的に（想定外セグメントで throw）。**実装後すぐデプロイしない**＝ユーザーが `vp dev` で
-  使い捨てフォルダ検証後にデプロイ。可能なら agent-browser で File[] 経路の UI（ボタン無効化表示等）だけでも確認。
+- **実装**（すべて `apps/website/src/`）:
+  - `lib/clean.ts`（新規）: `planDeletions(groups, images)`（純関数・CLI `clean.rs::plan_deletions` と規則一致＝autoDeletable のみ・
+    keeper 除外・`PlannedDeletion` は共有契約 `schema` を再利用）+ `applyDeletions(root, rootId, planned)`（1 件ずつ
+    **恒久削除** removeEntry → 成功時のみキャッシュ掃除 → per-file 記録・1 件失敗で止めない）。
+  - `lib/fsaccess.ts`: `removeByPath(root, path)`（`/` 分解 → 末尾以外 `getDirectoryHandle` → 親で `removeEntry`。`''`/`'.'`/`'..'`
+    セグメントは throw＝防御的。FS Access は構造的に root 配下しか辿れずサンドボックスが封じ込めを強制）+ `requestWritePermission`
+    （**削除の click 内**で `requestPermission({mode:"readwrite"})`＝transient activation 保持。scan は read のみ・段階要求 DESIGN §6.3）。
+  - `lib/db.ts`: `deleteHash`（正本＝throw 可）/ `deleteThumb`（best-effort＝内部 swallow。put\* と対の設計）。
+  - `lib/stores/scanStore.ts`: `rootHandle` 保持（File[] 経路は null）+ `deleteDuplicates`（権限 → applyDeletions →
+    **削除中に新スキャンで result が差し替わっていたら書き戻さない世代ガード**（`get().result === result`・clusterToken と同型）→
+    store/IDB reconcile → 再クラスタ → toast）。二重起動は `deleting` ガード。
+  - `components/ui/alert-dialog.tsx`（新規・shadcn/radix unified import）+ `components/DeleteDuplicatesButton.tsx`（新規）:
+    「N 件を削除（M 回収）」ボタン → **強確認 AlertDialog**（「元に戻せません・ゴミ箱なし・恒久」をアイコン+テキストで明示＝
+    色依存でない・件数/回収バイト/対象一覧最大100件の dry-run プレビュー）。**File[] 経路は永続 handle が無く削除不可 →
+    ボタン無効化 + 理由表示**。busy 中はクローズ抑止・`e.preventDefault()` で非同期完了までダイアログを保持。
+- **検証済**: `vp check`（型/lint/整形）+ `vp build` 緑。**agent-browser で File[] 経路を実機確認**（重複7枚→autoDeletable 2 群・
+  削除ボタン「3 件を削除」が disabled + 理由文言・keeper リング表示）。※ **FS Access 経路（有効ボタン→AlertDialog→実削除）は
+  ネイティブのフォルダ選択が要るため agent-browser 不可 → ユーザーが `vp dev` で使い捨てフォルダ検証後にデプロイ**。
+- **レビュー**: simplify=4 エージェント並列（reuse/simplification/efficiency/altitude）実施・反映済み（PlannedDeletion を schema 再利用・
+  死条件削除・reconcile 世代ガード）。安全不変条件（keeper/perceptual 保護・transient activation・per-file 安全・reconcile 順序）は
+  altitude レビューで確認済み・ブロッカーなし。codex は導入済みだが未ログイン（回すなら `!codex login`）。
+- **繰延べた最適化（実利小・破壊的パスは簡潔=安全優先。将来必要なら）**: ① `removeByPath` の親ディレクトリ再解決（ネスト深い
+  フォルダで大量削除時 O(D×深さ)。親ごとに handle を 1 回解決してグルーピング）② IDB 掃除を削除ループ後に 1〜2 txn でバッチ化。
+  ③ `planDeletions` を crates/core へ寄せ wasm 共有（clusterGroup と同型・CLI/TS の規則 drift 防止）。
 
 **(B) 保存 handle 復用 + 中断再開（(A) と権限フロー共通）**
 

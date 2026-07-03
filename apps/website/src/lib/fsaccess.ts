@@ -12,10 +12,41 @@ declare global {
   }
 }
 
+// requestPermission は lib.dom の型に無い（FS Access の権限 API）ので最小宣言。
+type PermMode = { mode?: "read" | "readwrite" };
+type WithPermission = FileSystemHandle & {
+  requestPermission?: (opts?: PermMode) => Promise<PermissionState>;
+};
+
 export type EnumeratedFile = { path: string; handle: FileSystemFileHandle };
 
 export function supportsFileSystemAccess(): boolean {
   return typeof window.showDirectoryPicker === "function";
+}
+
+/// 書き込み権限を要求する（**ユーザー操作内=click で呼ぶ**・DESIGN §6.3 の段階要求）。
+/// 許可されたら true。scan は read のみなので削除時にだけ readwrite へ昇格する
+/// （既に許可済みなら requestPermission はプロンプトを出さずそのまま granted を返す）。
+export async function requestWritePermission(handle: FileSystemDirectoryHandle): Promise<boolean> {
+  const h = handle as WithPermission;
+  if (!h.requestPermission) return false;
+  return (await h.requestPermission({ mode: "readwrite" })) === "granted";
+}
+
+/// root 相対パス（'/' 区切り）を辿り、親ディレクトリの removeEntry で 1 ファイルを削除する。
+/// **破壊的操作なので防御的に**: 空・'.'・'..' を含むセグメントは想定外として throw（CLI clean.rs の
+/// fail-closed に相当）。呼び出し側が readwrite 権限を取得済みである前提。
+export async function removeByPath(root: FileSystemDirectoryHandle, path: string): Promise<void> {
+  // split は必ず 1 要素以上を返すので、空パスは空セグメント（""）として下の検査で弾かれる。
+  const segments = path.split("/");
+  if (segments.some((s) => s === "" || s === "." || s === "..")) {
+    throw new Error(`削除対象のパスが不正です: ${path}`);
+  }
+  let dir = root;
+  for (let i = 0; i < segments.length - 1; i++) {
+    dir = await dir.getDirectoryHandle(segments[i]);
+  }
+  await dir.removeEntry(segments[segments.length - 1]);
 }
 
 /// フォルダを選ばせて永続ハンドルを得る（**ユーザー操作内**で呼ぶ）。スキャンは read のみ。

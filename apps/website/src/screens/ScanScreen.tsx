@@ -163,7 +163,7 @@ export function ScanScreen() {
                   スキップ <span className="num text-warning">{result.skipped.length}</span> ·{" "}
                 </>
               ) : null}
-              所要 <span className="num">{elapsedMs}</span> ms · 削除は Phase 3b
+              所要 <span className="num">{elapsedMs}</span> ms
             </span>
           </div>
 

@@ -3,6 +3,7 @@ import { CheckCircle2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Thumb } from "@/components/Thumb";
+import { DeleteDuplicatesButton } from "@/components/DeleteDuplicatesButton";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/format";
 import { STRICTNESS_LABEL, type DupGroup, type ImageRecord } from "@/lib/core";
@@ -33,7 +34,10 @@ export function DuplicateGroups() {
         <Stat label="画像" value={images.length} />
         <Stat label="重複グループ" value={groups.length} />
         <Stat label="重複" value={duplicates} />
-        <Stat className="ml-auto" label="回収可能" value={formatBytes(reclaimable)} />
+        <div className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-2">
+          <Stat label="回収可能" value={formatBytes(reclaimable)} />
+          <DeleteDuplicatesButton />
+        </div>
       </div>
 
       {groups.length === 0 ? (

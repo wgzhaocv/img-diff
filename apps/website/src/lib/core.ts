@@ -11,7 +11,7 @@ import type { DupGroup, ImageRecord, Strictness } from "schema";
 // dHash/正規化と同じく grouping ロジックも core に一本化する（JS で再実装しない）。
 // 型（Strictness / ImageRecord / DupGroup）は web/CLI 共有契約 `schema` を正本として使う。
 
-export type { DupGroup, ImageRecord, Strictness } from "schema";
+export type { DupGroup, ImageRecord, PlannedDeletion, Strictness } from "schema";
 
 /// 厳密度のラベル（表示の単一定義。Tabs とグループ表示で共有）。
 export const STRICTNESS_ORDER: readonly Strictness[] = ["exact", "pixel", "perceptual"];

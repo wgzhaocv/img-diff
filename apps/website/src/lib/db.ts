@@ -99,6 +99,12 @@ export async function putHash(entry: HashEntry): Promise<void> {
   await db.put("hashes", entry);
 }
 
+/// キャッシュ済ハッシュを 1 件削除（実削除後の reconcile 用＝正本を消す）。
+export async function deleteHash(rootId: string, path: string): Promise<void> {
+  const db = await getDB();
+  await db.delete("hashes", [rootId, path]);
+}
+
 export async function getThumb(rootId: string, path: string): Promise<Blob | undefined> {
   const db = await getDB();
   return (await db.get("thumbs", [rootId, path]))?.blob;
@@ -112,5 +118,15 @@ export async function putThumb(entry: ThumbEntry): Promise<void> {
     await db.put("thumbs", entry);
   } catch {
     // IDB quota 超過など。サムネは捨てて続行（表示は原 File にフォールバック）。
+  }
+}
+
+/// サムネを 1 件削除（実削除後の reconcile 用）。サムネは正本でないので失敗は握り潰す（best-effort）。
+export async function deleteThumb(rootId: string, path: string): Promise<void> {
+  try {
+    const db = await getDB();
+    await db.delete("thumbs", [rootId, path]);
+  } catch {
+    // 消せなくても致命でない（次回スキャンの GC で整合）。
   }
 }
