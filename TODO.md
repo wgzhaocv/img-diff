@@ -32,26 +32,36 @@
 
 ### 2. web（Phase 0〜3b サムネまで完了・commit 済。scan は実用レベルで動作）
 
-**▶ 再開時の次アクション（compact 後はまずここを読む）**
+**▶ 再開時の次アクション（新しい chat はまずここを読む）**
 
-- 現状: scan + **compare（2枚比較）完了・本番デプロイ済**（imgdiff.wgzhao.me で稼働）。compare=並べ /
-  境界スライダ / 差分ハイライト(canvas) + SSIM/PSNR/差分割合/ハミングを等幅表示 + 段階進捗。全経路で **web dHash==CLI**。
-  **ライブラリ化済**（ユーザー指摘「手搓するな」）: ルーティング=**react-router v8**（`#` なしクリーンパス）、
-  状態=**zustand**（`src/lib/stores/*`・ルート跨ぎ保持・props ドリリング解消）、スライダ=**react-compare-slider**。
-  catalog の vite-plus/vite は **0.2.2 固定**（`latest` 割れの型二重定義を回避）。
-  ※ compare の worker/DOM 結線は agent-browser 不可環境のため **要 `vp dev` 手動確認**（型/lint/build は緑）。
-- 次の選択肢（**ユーザー未確定**＝提示して選んでもらう）:
-  - **(A) Phase 4b**: install ページ（OS 選択で CLI zip / install.ps1 の irm|iex / `npx skills add` を出し分け）
-    → CF Workers Static Assets デプロイ検証（imgdiff.wgzhao.me 本番・\_headers の COOP/COEP）。※対外・要ユーザー確認。
-  - **(B) Phase 3b 残り**: 実削除（**破壊的・web はゴミ箱不可＝恒久削除・要強確認・FS Access は自動検証不可**）/
-    中断再開 UI（jobs）/ 保存 handle 復用（queryPermission で再選択なし続扫）/ グループ仮想化 / shrink-on-load。
-- 手順: 実装 → **各 phase を simplify=4 エージェント並列レビュー**（codex rescue は**未インストール**＝
-  `npm i -g @openai/codex`+`/codex:setup` しない限り不可。※Phase 4a は Anthropic 側の session limit で
-  4 エージェント中 simplification のみ完走・他 3 は inline 代替でカバー）→ 反映 → **`vp build`→`vp preview`**
-  で検証（`vp dev` は初回ワーカー依存の再最適化でスキャン state が飛ぶ）→ master 直接コミット。
-  agent-browser 検証は File[] 経路のみ（input の webkitdirectory を eval で外して upload・`?r=` でキャッシュ回避）。
-  **FS Access のフォルダ選択・compare の worker 経路はネイティブ/実機依存で agent-browser 不可 → 要手動確認**。
-  ビルドに mingw PATH 不要（wasm pkg は `apps/website/src/wasm` にコミット済）。
+- **現状（すべて本番デプロイ済・最新 version `c736b4e7`・imgdiff.wgzhao.me 稼働）**:
+  - **scan**（フォルダ重複検索）+ **compare**（2枚比較）が動作。全経路で **web dHash==CLI**。
+  - compare = 並べて / 境界スライダ / 差分ハイライト(canvas) + SSIM/PSNR/差分割合/ハミング等幅表示 + 段階進捗（読込→計算→差分）。
+  - **ライブラリ化済**（ユーザー指摘「何でも手搓するな」[[prefer-libraries-not-handrolled]]）:
+    ルーティング=**react-router v8**（`BrowserRouter`+`Routes`+`NavLink`・**URL は `#` なしのクリーンパス** `/compare` 等）、
+    状態=**zustand**（`src/lib/stores/scanStore.ts`・`compareStore.ts`＝ルート切替でも結果/選択/進捗/**ワーカープール**保持・
+    props ドリリング解消。`DuplicateGroups` は結果をストア直読み）、before/after=**react-compare-slider**、
+    perceptual しきい値=**shadcn Slider**（`components/ui/slider.tsx`・0〜32・debounce は画面側）。
+  - catalog（root package.json）の **vite-plus/vite を `0.2.2` に固定**（`latest` が root/workspace で割れ、vite の
+    Plugin 型が二重定義になり型崩れ→版固定で単一化。今後 `vp add` 後に型崩れしたらまずここを疑う）。
+  - UI 文言は日本語（「査重」等の中国語は排除。scan タブ=「重複を探す」）。install ページは**未実装**（Phase 1 のプレースホルダ）。
+- **今やること = ユーザー選択済み: Phase 3b 残り。まず「実削除」から着手（下の「### 3. Phase 3b 残り」の実装計画に従う）。**
+  実削除は**破壊的・恒久（web にゴミ箱なし）**なので dry-run プレビュー + 強確認、**実装後すぐデプロイしない**
+  （ユーザーが `vp dev` で**使い捨てフォルダ**で検証してから）。着手直前に `fsaccess.ts` を読み終えた所で中断。
+- **検証環境（重要・更新）**: このセッションには **`agent-browser` skill が利用可能**（実ブラウザ駆動＝
+  compare や FS Access もスクショ/操作で確認できる可能性あり。まず試す）。**`codex:setup`/`codex:rescue` skill も存在**
+  （setup で CLI 準備を確認してから rescue を回す。以前「codex 未インストール」と記録したが skill 経路が来た）。
+  ただし FS Access の**フォルダ選択ダイアログ自体**はネイティブなので、確実なのは依然 `vp dev` 手動確認。
+- **仕上げレビュー**: 各まとまりで simplify=4 エージェント並列（reuse/simplification/efficiency/altitude）
+  [[simplify-means-4-agent-review]]。※直近は Anthropic 側 session limit で一部しか回らず inline 代替した回あり。
+  破壊的な実削除は特に念入りに（codex rescue も可能なら併用）。
+- **手順**: 実装 → レビュー反映 → `vp check`（型/lint/整形）→ `vp build` → 検証 → master 直接コミット
+  [[commit-directly-no-branch]] → （非破壊なら）`cd apps/website && wrangler deploy`（個人 CF・wgzhaocv@gmail.com・
+  imgdiff.wgzhao.me）。ビルドに mingw PATH 不要（wasm pkg は `apps/website/src/wasm` にコミット済）。
+- **このセッションの commit（新しい順）**: `580edec`(Slider) `e981c1a`(選択ボタン hover 修正＝secondary→primary +
+  wasm init を `{module_or_path}` に＝deprecated 警告解消) `2cffc16`(todo) `0723630`(査重→日本語) `b5454f5`(react-router+
+  zustand+react-compare-slider 採用・手書きルータ削除) `76b7120`(進捗表示/スライダ/`#`廃止/タブ状態保持の初版※後で b5454f5 が上書き)
+  `f6195ae`(todo) `8ca0b62`(compare Phase 4a)。作業ツリーはクリーン想定。
 
 - **Phase 0 完了**: `crates/wasm`（wasm-bindgen）+ native==wasm parity 検証（上記「完成済み」参照）。
 - **Phase 1 完了（commit 済 7fc1b54）**: React 化 + UI 骨格。4 エージェントレビュー反映済み。
@@ -84,9 +94,6 @@
   thumb Blob→IDB→原 File の優先度。実機（File[]）でサムネ表示検証済み。2 エージェントレビュー反映（thumb 失敗を
   非致命に・putThumb を quota 耐性に・thumb を transfer）。**要計測（DESIGN §6 は許容）**: 全画像 eager encode /
   File[] の thumbByPath O(N) メモリ（表示は重複メンバのみ）。cache-hit 画像のサムネ backfill は未（file 表示で代替）。
-- **Phase 3b 残り**: 中断再開 UI（jobs ストア・「前回の続行」）+ 実削除（readwrite 権限・確認・removeEntry。
-  web はゴミ箱不可＝恒久削除の確認 UI）+ 保存 handle 再利用（queryPermission/requestPermission で再選択なし再開）
-  - グループ仮想化 + shrink-on-load（§7.1）+ pixelSha256 の native==wasm byte golden + キャッシュ GC/reconcile。
 - **Phase 4a 完了（commit 済 8ca0b62）**: compare（2 枚比較）。worker に op="decode" 追加（白平坦化後の
   全分解能 RGBA を transfer で返す。hashOne/decodeOne は共通 `decodeFull` を op ごとに射影＝重複解消）→
   主線程 core の `compareScores`/`diffHighlight`/`hammingHex`（CompareScores は getter 読取後に free）で
@@ -97,8 +104,49 @@
   `HASH_BITS` を解決。型は元々 src 参照）。simplify レビュー反映（decodeFull 一本化・pixelEqual 導出・
   comparable 別名廃止・decodeOne 戻り型で二重ガード解消ほか）。型/lint/整形・build 緑。
   ※ **worker/DOM 結線は agent-browser 不可のため `vp dev` で手動確認要**（メトリクス値・3 表示切替・差分描画）。
-- **Phase 4b（残り）**: install ページ（OS 選択で出し分け）+ CF Workers Static Assets デプロイ検証。
+- **Phase 4a 後の UX 改修 完了（commit 済）**: 段階進捗（compare）・スライダ handle 化→react-compare-slider・
+  `#` 廃止(react-router)・タブ切替の状態保持(zustand)・「査重」→日本語・選択ボタン hover 修正(secondary→primary)・
+  wasm init を `{module_or_path}` 化（deprecated 警告解消）・perceptual しきい値を shadcn Slider に。全て本番反映済。
+- **Phase 4b（残り）**: install ページ（OS 選択で出し分け）+ 再デプロイ。install.ps1 は既に本番稼働
+  （`https://imgdiff.wgzhao.me/install.ps1`）。Mac/Linux バイナリは未リリース→「build from source / 近日」表示は要ユーザー判断。
 - 設計は `apps/website/DESIGN.md`、ロジック正本は `packages/schema/SPEC.md`。
+
+### 3. Phase 3b 残り（← 今ここ。実削除から）
+
+**(A) 実削除 — 最優先・破壊的・恒久（web にゴミ箱なし）・FS Access 経路のみ**
+
+CLI `crates/cli/src/clean.rs`（SPEC §5.1）の安全モデルを踏襲: **dry-run プレビュー既定 + 明示確認**、
+対象は **`autoDeletable=true`（exact/pixel）グループの keeper 以外のみ**。perceptual は絶対に削除しない・keeper は必ず残す。
+
+- **前提**: 削除には `FileSystemDirectoryHandle`（root）が要る。File[] 経路（ドラッグ/ドロップ・input）は永続 handle が
+  無く**削除不可**→ UI で無効化＋理由表示。scanStore に `rootHandle` を持たせる（現状 `runFolder(handle)` は handle を
+  捨てているので保持するよう変更。`result.rootId` はあるが handle 本体が要る）。
+- **権限**: 削除実行の**ユーザー操作（確認ボタンの click）内**で `rootHandle.requestPermission({mode:"readwrite"})`。
+  事前チェックは `queryPermission({mode:"readwrite"})`。scan は read のみ（段階要求・DESIGN §6.3）。
+- **removeEntry**: root 相対パス（`/` 区切り）を分解 → 末尾以外を `getDirectoryHandle` で辿り → 親で `removeEntry(name)`。
+  `fsaccess.ts` に `removeByPath(root, path)` ヘルパを追加（`walkImages` と同じ handle API）。
+- **フロー**: 「重複を N 件削除（M 回収）」ボタン（autoDeletable グループがあり rootHandle 有りのとき表示）→
+  **shadcn AlertDialog**（`components/ui/alert-dialog.tsx` を新規追加＝radix・unified import）で
+  「**永久削除・元に戻せません**」と対象件数/回収バイトを明示 → 確認 → readwrite 要求 → 各 non-keeper を removeEntry →
+  per-file 結果（成功/失敗）を集計 → **store とキャッシュを reconcile**（result.images/fileByPath/thumbByPath から削除・
+  `db.ts` に `deleteHash`/`deleteThumb` 追加して IDB からも消す）→ 再クラスタリング → toast で結果。
+- **安全**: 1 件失敗で全体を止めず per-file 記録（CLI 同様）。keeper・perceptual を絶対に触らないことをコードとテストで担保。
+  removeByPath はパス解決を防御的に（想定外セグメントで throw）。**実装後すぐデプロイしない**＝ユーザーが `vp dev` で
+  使い捨てフォルダ検証後にデプロイ。可能なら agent-browser で File[] 経路の UI（ボタン無効化表示等）だけでも確認。
+
+**(B) 保存 handle 復用 + 中断再開（(A) と権限フロー共通）**
+
+- 起動時に `getRoots()`（`roots` に dirHandle 永続済み・`resolveRoot` が putRoot 済み）から前回フォルダを提示 →
+  `queryPermission`→（click 内）`requestPermission`→ `scanFolder(handle)` はキャッシュ突合で高速再スキャン。
+- `jobs` ストア（db.ts に定義済・未使用）で `status!="done"` の未完了ジョブを検出 →「前回の続行」提示。
+  逐次 putHash 済みなので残りだけ hash。DESIGN §5「再開フロー」。
+
+**(C) 低リスクの小物（agent-browser/自前で検証しやすい）**
+
+- **キャッシュ GC/reconcile**: scan 時に列挙に無い（削除/移動された）path の hashes/thumbs を掃除。削除後にも呼ぶ。
+- **pixelSha256 byte golden**: `crates/wasm` に native==wasm の pixelSha256（`rgba_sha256`）一致テスト（要 mingw on PATH）。
+- **グループ仮想化**: 数千グループ時。`@tanstack/react-virtual`（ライブラリ・可変高）。実利が出てから。
+- **shrink-on-load（DESIGN §7.1）**: 1 パス目を縮小デコードで高速化。導入時 **dHash parity(golden) を必ず再実行**。「先に計測」方針。
 
 ## ビルド/実行メモ（windows-gnu）
 
