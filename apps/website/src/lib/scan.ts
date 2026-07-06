@@ -1,7 +1,7 @@
 import type { ImageRecord } from "schema";
 import type { HashResult, PixelResult } from "@/lib/hashTypes";
 import { HashPool } from "@/lib/workerPool";
-import { getRootHashes, HASH_ALGO, putHash, putThumb, type HashEntry } from "@/lib/db";
+import { gcOrphans, getRootHashes, HASH_ALGO, putHash, putThumb, type HashEntry } from "@/lib/db";
 import { resolveRoot, walkImages } from "@/lib/fsaccess";
 
 // 対象拡張子（CLI の既定 ext と揃える）。
@@ -218,6 +218,17 @@ export async function scanFolder(
   const root = await resolveRoot(dirHandle);
   const files = await walkImages(dirHandle, isImageFile);
   const cached = await getRootHashes(root.rootId);
+
+  // GC: 列挙に無くなった path（OS 側で削除/移動）のキャッシュを掃除して stale を残さない（DESIGN §5）。
+  // present は「開けたか」ではなく「列挙に在ったか」で見る（getFile 失敗の既存ファイルを誤って GC しない）。
+  // 空列挙（権限喪失や root ごと読めない等）は信用せず GC しない＝全キャッシュを消さない安全ガード。
+  if (files.length > 0) {
+    const present = new Set(files.map((f) => f.path));
+    await gcOrphans(
+      root.rootId,
+      [...cached.keys()].filter((p) => !present.has(p)),
+    );
+  }
 
   const fileByPath = new Map<string, File>();
   const entryByPath = new Map<string, HashEntry>();

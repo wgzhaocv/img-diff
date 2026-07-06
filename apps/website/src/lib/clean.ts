@@ -1,6 +1,6 @@
 import type { DupGroup, ImageRecord, PlannedDeletion } from "@/lib/core";
 import { removeByPath } from "@/lib/fsaccess";
-import { deleteHash, deleteThumb } from "@/lib/db";
+import { gcOrphans } from "@/lib/db";
 
 // 重複の実削除（SPEC §5.1 clean）。CLI `crates/cli/src/clean.rs` の安全モデルを web に踏襲する。
 // **重大な差**: CLI はゴミ箱送り（復元可）だが、web にはゴミ箱がなく **removeEntry は恒久削除**。
@@ -53,12 +53,12 @@ export async function applyDeletions(
       outcomes.push({ path: p.path, ok: false, error: e instanceof Error ? e.message : String(e) });
       continue;
     }
-    // ファイルは消えたのでキャッシュも掃除（正本 hashes → サムネ thumbs）。掃除失敗は非致命。
-    await deleteHash(rootId, p.path).catch(() => {});
-    await deleteThumb(rootId, p.path);
     deletedPaths.push(p.path);
     deletedBytes += p.bytes;
     outcomes.push({ path: p.path, ok: true });
   }
+  // 消えたファイルのキャッシュ（hashes 正本 + thumbs）をまとめて掃除（best-effort＝失敗しても削除は成功扱い。
+  // 途中で中断しても残った stale は次回スキャンの GC で整合）。scan の orphan 掃除と同じ経路。
+  await gcOrphans(rootId, deletedPaths);
   return { outcomes, deletedPaths, deletedBytes };
 }

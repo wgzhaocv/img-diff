@@ -1,5 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { FolderOpen, Layers, Loader2, ScanLine, ShieldCheck, Trash2 } from "lucide-react";
+import { toast } from "sonner";
+import {
+  FolderClock,
+  FolderOpen,
+  Layers,
+  Loader2,
+  ScanLine,
+  ShieldCheck,
+  Trash2,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,7 +19,8 @@ import { DropZone } from "@/components/DropZone";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { DuplicateGroups } from "@/components/DuplicateGroups";
 import { STRICTNESS_LABEL, STRICTNESS_ORDER, type Strictness } from "@/lib/core";
-import { pickDirectory, supportsFileSystemAccess } from "@/lib/fsaccess";
+import { getRoots, type RootEntry } from "@/lib/db";
+import { pickDirectory, requestReadPermission, supportsFileSystemAccess } from "@/lib/fsaccess";
 import { useScanStore } from "@/lib/stores/scanStore";
 import type { ScanProgress } from "@/lib/scan";
 
@@ -33,8 +43,8 @@ const FEATURES = [
   },
   {
     icon: Trash2,
-    title: "安全に削除",
-    body: "既定はドライラン。実削除はゴミ箱送りのみで、いつでも復元可能。",
+    title: "慎重に削除",
+    body: "削除前に対象をプレビュー・確認。残す 1 枚は自動保護し、完全一致・ピクセル一致のみを対象に。",
   },
 ];
 
@@ -52,11 +62,25 @@ export function ScanScreen() {
     runFolder,
   } = useScanStore();
   const [thresholdInput, setThresholdInput] = useState(threshold);
+  const [savedRoots, setSavedRoots] = useState<RootEntry[]>([]);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   // フォルダ選択にする（webkitdirectory は JSX 型に無いので属性で付与）。
   useEffect(() => {
     inputRef.current?.setAttribute("webkitdirectory", "");
+  }, []);
+
+  // 前回スキャンしたフォルダ（roots に永続ハンドル）を提示し、ワンクリック再スキャンできるようにする。
+  // FS Access 非対応（File[] 経路）は永続ハンドルが無いので出さない。
+  useEffect(() => {
+    if (!supportsFileSystemAccess()) return;
+    let alive = true;
+    void getRoots().then((roots) => {
+      if (alive) setSavedRoots(roots);
+    });
+    return () => {
+      alive = false;
+    };
   }, []);
 
   // しきい値は連打で O(N²) の perceptual クラスタを毎回走らせないようデバウンスしてストアへ確定（切替は即時）。
@@ -79,6 +103,22 @@ export function ScanScreen() {
     const files = Array.from(e.currentTarget.files ?? []);
     e.currentTarget.value = ""; // 同じフォルダを再選択できるように。
     if (files.length > 0) void runFiles(files);
+  }
+
+  // 前回フォルダを再スキャン: click 内で read 権限を昇格（reload 後は prompt 状態）→ キャッシュ突合で高速再スキャン。
+  async function handleSavedRoot(entry: RootEntry): Promise<void> {
+    try {
+      const granted = await requestReadPermission(entry.dirHandle);
+      if (!granted) {
+        toast.error("フォルダへのアクセス許可が必要です");
+        return;
+      }
+    } catch {
+      // 失効/削除済みハンドル等で requestPermission が reject した場合。
+      toast.error("このフォルダを開けませんでした（選び直してください）");
+      return;
+    }
+    void runFolder(entry.dirHandle);
   }
 
   const scanning = status === "scanning";
@@ -115,6 +155,28 @@ export function ScanScreen() {
           {scanning ? "処理中…" : "フォルダを選ぶ"}
         </Button>
       </DropZone>
+
+      {status === "idle" && savedRoots.length > 0 ? (
+        <div className="mx-auto max-w-2xl space-y-2">
+          <p className="text-sm text-muted-foreground">
+            前回のフォルダ（キャッシュで高速に再スキャン）
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {savedRoots.map((root) => (
+              <Button
+                key={root.rootId}
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                onClick={() => void handleSavedRoot(root)}
+              >
+                <FolderClock className="size-3.5 text-primary" />
+                {root.name}
+              </Button>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       {scanning ? (
         <div className="mx-auto max-w-2xl space-y-2" role="status" aria-live="polite">

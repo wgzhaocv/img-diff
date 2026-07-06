@@ -248,6 +248,8 @@ fn parity_vectors() -> Vec<String> {
         out.push(format!("dhash {name} {}", hash::to_hex(hash::dhash_rgba(&f, w, h))));
         // 白平坦化後 RGBA の畳み込みも見る（flatten の両端一致）。
         out.push(format!("flat {name} {}", fold(&f)));
+        // pixelSha256（白平坦化後 RGBA の SHA-256）の両端 bit 一致。CLI/web の pixel 一致判定の鍵。
+        out.push(format!("sha {name} {}", hash::sha256_hex(&f)));
     }
     for (name, a, b, w, h) in compare_pairs() {
         let (mut fa, mut fb) = (a.clone(), b.clone());
@@ -269,16 +271,22 @@ fn parity_vectors() -> Vec<String> {
 const GOLDEN: &[&str] = &[
     "dhash diag-100x77 fffffffffffefcf8",
     "flat diag-100x77 b4dbf87e",
+    "sha diag-100x77 c72e0b22578bd66dc34565a55631e27c8d3a9b4b7cceb5f5d98ad475d17744b7",
     "dhash radial-63x63 0f0f0f0f0f0f0f0f",
     "flat radial-63x63 29e25660",
+    "sha radial-63x63 0cf38ae8139fffbfc3ee22e79f5014966d7182d69b91272a36dd7741d5b34016",
     "dhash ripple-128x40 2424242424242424",
     "flat ripple-128x40 0d41c250",
+    "sha ripple-128x40 b68688f4b76ad911788e054fb77f1073b9090b2ade7aeabd2f8ee322cca59f81",
     "dhash checker-90x80 3232c80032c8cc32",
     "flat checker-90x80 d0b76c54",
+    "sha checker-90x80 9e114fe0a59db92e35d8bcd2e1e04facb0d586d2260303d64d2cc31cb7a7d557",
     "dhash noise-70x50 a5a72d05a9bd69d9",
     "flat noise-70x50 4fb12c38",
+    "sha noise-70x50 31e5849177c379f8d549d1616f0399bded0b6406104aaaad5f79c4dfdf5b6456",
     "dhash exact-9x8 ffffffffffffffff",
     "flat exact-9x8 44dde0c4",
+    "sha exact-9x8 f026368aaffc3ea78a27563c12e71f51856745952a4315840a8a203de0b4cc28",
     "pdr same 0000000000000000",
     "ssim same 3ff0000000000000",
     "psnr same 4059000000000000",

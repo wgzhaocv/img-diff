@@ -33,6 +33,15 @@ export async function requestWritePermission(handle: FileSystemDirectoryHandle):
   return (await h.requestPermission({ mode: "readwrite" })) === "granted";
 }
 
+/// 保存済みハンドルの read 権限を（**ユーザー操作内=click で**）再取得する。許可されたら true。
+/// reload 後の永続ハンドルは権限 "prompt" 状態なので、前回フォルダの再スキャン前にこれで昇格する
+/// （既に許可済みならプロンプト無しで granted）。DESIGN §5「再開フロー」/ §6.3。
+export async function requestReadPermission(handle: FileSystemDirectoryHandle): Promise<boolean> {
+  const h = handle as WithPermission;
+  if (!h.requestPermission) return false;
+  return (await h.requestPermission({ mode: "read" })) === "granted";
+}
+
 /// root 相対パス（'/' 区切り）を辿り、親ディレクトリの removeEntry で 1 ファイルを削除する。
 /// **破壊的操作なので防御的に**: 空・'.'・'..' を含むセグメントは想定外として throw（CLI clean.rs の
 /// fail-closed に相当）。呼び出し側が readwrite 権限を取得済みである前提。

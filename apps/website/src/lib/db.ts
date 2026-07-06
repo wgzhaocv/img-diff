@@ -99,12 +99,6 @@ export async function putHash(entry: HashEntry): Promise<void> {
   await db.put("hashes", entry);
 }
 
-/// キャッシュ済ハッシュを 1 件削除（実削除後の reconcile 用＝正本を消す）。
-export async function deleteHash(rootId: string, path: string): Promise<void> {
-  const db = await getDB();
-  await db.delete("hashes", [rootId, path]);
-}
-
 export async function getThumb(rootId: string, path: string): Promise<Blob | undefined> {
   const db = await getDB();
   return (await db.get("thumbs", [rootId, path]))?.blob;
@@ -121,12 +115,21 @@ export async function putThumb(entry: ThumbEntry): Promise<void> {
   }
 }
 
-/// サムネを 1 件削除（実削除後の reconcile 用）。サムネは正本でないので失敗は握り潰す（best-effort）。
-export async function deleteThumb(rootId: string, path: string): Promise<void> {
+/// 指定 path 群のキャッシュ（hashes 正本 + thumbs）をまとめて 1 txn で消す。
+/// scan 時の orphan 掃除（列挙に無くなった path）と、実削除後の reconcile（消したファイル）が共有する。
+/// best-effort: 掃除に失敗しても呼び出し側は止めない（キャッシュは再導出でき、次回スキャンの GC でも整合）。
+export async function gcOrphans(rootId: string, paths: string[]): Promise<void> {
+  if (paths.length === 0) return;
   try {
     const db = await getDB();
-    await db.delete("thumbs", [rootId, path]);
+    const tx = db.transaction(["hashes", "thumbs"], "readwrite");
+    const hashes = tx.objectStore("hashes");
+    const thumbs = tx.objectStore("thumbs");
+    await Promise.all(
+      paths.flatMap((p) => [hashes.delete([rootId, p]), thumbs.delete([rootId, p])]),
+    );
+    await tx.done;
   } catch {
-    // 消せなくても致命でない（次回スキャンの GC で整合）。
+    // キャッシュ掃除は best-effort（正本の再導出は可能）。
   }
 }

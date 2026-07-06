@@ -1,7 +1,6 @@
 //! CLI 共通の小ユーティリティ（scan / compare / clean が共有）。
 
 use imgdiff_core::report::{Producer, HASH_ALGO_VERSION};
-use sha2::{Digest, Sha256};
 
 /// この CLI の Producer（app="cli"・バージョンは本クレート・vips 実体・ハッシュ手順）。
 /// scan / compare / clean で共有する。`env!("CARGO_PKG_VERSION")` は**本クレート**の版を指すため、
@@ -15,15 +14,9 @@ pub fn cli_producer() -> Producer {
     }
 }
 
-/// バイト列の SHA-256 を小文字 16 進 64 文字で返す。
+/// バイト列の SHA-256 を小文字 16 進 64 文字で返す（定義は core に集約＝CLI/web/wasm で drift しない）。
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    use std::fmt::Write;
-    let digest = Sha256::digest(bytes);
-    let mut s = String::with_capacity(64);
-    for b in digest {
-        let _ = write!(s, "{b:02x}");
-    }
-    s
+    imgdiff_core::hash::sha256_hex(bytes)
 }
 
 /// 拡張子を正規化（小文字化、jpg→jpeg）。ImageRecord.format に使う簡易判定。

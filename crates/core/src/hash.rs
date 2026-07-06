@@ -1,6 +1,20 @@
 //! dHash（知覚ハッシュ）。`SPEC.md §1` の手順をここに一本化する（CLI/wasm 共有）。
 
 use image::{imageops::FilterType, ImageBuffer, Rgba};
+use sha2::{Digest, Sha256};
+
+/// バイト列の SHA-256 を小文字 16 進 64 文字で返す。ファイル内容の sha256 と、
+/// **白平坦化後 RGBA** に対して呼べば pixelSha256（SPEC §2.1・pixel 一致判定の鍵）になる。
+/// CLI（`util::sha256_hex`）と web（`crypto.subtle`）はこれと同値を出す。定義を core 1 箇所に集約する。
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    let digest = Sha256::digest(bytes);
+    let mut s = String::with_capacity(64);
+    for b in digest {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
 
 /// 9x8 グレースケール（行優先、各値 0..=255、計 72 個）から 64bit の dHash を計算する。
 /// 各行で隣接ピクセル `left < right` を 1 ビット（行優先・MSB 先頭）。SPEC.md §1 step 7。
@@ -119,6 +133,19 @@ mod tests {
         assert_eq!(hamming(0, 0), 0);
         assert_eq!(hamming(0, u64::MAX), 64);
         assert_eq!(hamming(0b1011, 0b0010), 2);
+    }
+
+    /// 既知の SHA-256（空入力と "abc"）で 64 文字小文字 16 進を確認する。
+    #[test]
+    fn sha256_hex_known_vectors() {
+        assert_eq!(
+            sha256_hex(&[]),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
     }
 
     /// width*height*4 でないバッファや寸法 0 は 0 を返す。
