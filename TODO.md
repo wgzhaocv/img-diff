@@ -34,8 +34,8 @@
 
 **▶ 再開時の次アクション（新しい chat はまずここを読む）**
 
-- **現状（すべて本番デプロイ済・最新 version `bfd3bbca`＝3b 残り込み・imgdiff.wgzhao.me 稼働）**:
-  - **scan**（フォルダ重複検索）+ **compare**（2枚比較）が動作。全経路で **web dHash==CLI**。
+- **現状（すべて本番デプロイ済・最新 version `894e5f89`＝install ページ込み・imgdiff.wgzhao.me 稼働）**:
+  - **scan**（フォルダ重複検索）+ **compare**（2枚比較）+ **install ページ**が動作。全経路で **web dHash==CLI**。
   - **前回フォルダ再スキャン**（idle に「前回のフォルダ」チップ→click 内 read 権限→キャッシュ突合で高速再スキャン）、
     **scan-time キャッシュ GC**（列挙に無くなった path の hashes/thumbs 掃除）、**pixelSha256 golden**（native==wasm）を追加（commit `af529e9`・下記 §3）。
   - compare = 並べて / 境界スライダ / 差分ハイライト(canvas) + SSIM/PSNR/差分割合/ハミング等幅表示 + 段階進捗（読込→計算→差分）。
@@ -46,11 +46,14 @@
     perceptual しきい値=**shadcn Slider**（`components/ui/slider.tsx`・0〜32・debounce は画面側）。
   - catalog（root package.json）の **vite-plus/vite を `0.2.2` に固定**（`latest` が root/workspace で割れ、vite の
     Plugin 型が二重定義になり型崩れ→版固定で単一化。今後 `vp add` 後に型崩れしたらまずここを疑う）。
-  - UI 文言は日本語（「査重」等の中国語は排除。scan タブ=「重複を探す」）。install ページは**未実装**（Phase 1 のプレースホルダ）。
-- **今やること = Phase 4b（install ページ）。Phase 3b は完了**: (A) 実削除・(B) 前回フォルダ再スキャン・
-  (C-1) scan-time GC・(C-2) pixelSha256 golden すべて commit 済・本番デプロイ済（version `bfd3bbca`・下の「### 3」参照）。
-  **繰延べ**: (C-3) グループ仮想化・(C-4) shrink-on-load は「先に計測・実利が出てから」方針で未着手（§3 (C) 参照）。
-  FS Access 経路（実削除・前回フォルダ再スキャン・GC）は E2E 未検証のままユーザー指示で直接デプロイ（不具合が出たらこの経路を疑う）。
+  - UI 文言は日本語（「査重」等の中国語は排除。scan タブ=「重複を探す」）。**install ページ 実装済**（commit `5d3460d`）:
+    OS タブ（Windows/macOS/Linux・detectOS で既定自動判定）・コピー可能な `CopyBlock`・Windows=`irm|iex` / macOS/Linux=`cargo install --git`・
+    AI 手順書=`npx skills add`。**agent-browser で E2E 検証済**（このページはネイティブダイアログ不要）。simplify=4エージェント + codex review 反映。
+- **Phase 3b / 4a / 4b すべて完了・本番デプロイ済（version `894e5f89`）。web の主要 3 画面（scan / compare / install）は完成。**
+  - **繰延べ**: (C-3) グループ仮想化・(C-4) shrink-on-load は「先に計測・実利が出てから」方針で未着手（§3 (C) 参照）。
+  - FS Access 経路（実削除・前回フォルダ再スキャン・GC）は E2E 未検証のままユーザー指示で直接デプロイ（不具合が出たらこの経路を疑う）。
+  - **次の候補 = 配布の拡充（§1）**: GitHub での実リリース作成（`latest` を実在させないと install の `irm|iex` が失敗）・Linux/Mac バイナリ + release。
+    install ページのコマンドは正しいが、GitHub Releases に実体が無いと Windows one-liner は動かない点に注意。
 - **検証環境（重要・更新）**: このセッションには **`agent-browser` skill が利用可能**（実ブラウザ駆動＝
   compare や FS Access もスクショ/操作で確認できる可能性あり。まず試す）。**`codex:setup`/`codex:rescue` skill も存在**
   （setup で CLI 準備を確認してから rescue を回す。以前「codex 未インストール」と記録したが skill 経路が来た）。
@@ -110,8 +113,14 @@
 - **Phase 4a 後の UX 改修 完了（commit 済）**: 段階進捗（compare）・スライダ handle 化→react-compare-slider・
   `#` 廃止(react-router)・タブ切替の状態保持(zustand)・「査重」→日本語・選択ボタン hover 修正(secondary→primary)・
   wasm init を `{module_or_path}` 化（deprecated 警告解消）・perceptual しきい値を shadcn Slider に。全て本番反映済。
-- **Phase 4b（残り）**: install ページ（OS 選択で出し分け）+ 再デプロイ。install.ps1 は既に本番稼働
-  （`https://imgdiff.wgzhao.me/install.ps1`）。Mac/Linux バイナリは未リリース→「build from source / 近日」表示は要ユーザー判断。
+- **Phase 4b 完了（commit `5d3460d`・本番デプロイ済 version `894e5f89`）**: install ページを実ページ化。
+  `components/CopyBlock.tsx`（新規・コピー可能コードブロック）+ `screens/InstallScreen.tsx`（OS タブ Windows/macOS/Linux・
+  `detectOS` で既定自動判定）。Windows=`irm https://imgdiff.wgzhao.me/install.ps1 | iex`（+ cmd 変体・手動 zip は
+  `releases/latest`）、macOS/Linux=`cargo install --git https://github.com/wgzhaocv/img-diff imgdiff`（要 libvips+libheif・
+  プレビルドは近日・ユーザー決定でソースビルド案内）、AI 手順書=`npx skills add github:wgzhaocv/img-diff`。中国語「手册」是正。
+  **agent-browser で E2E 検証済**（OS タブ自動判定・コマンドが install.ps1 と一致・コピー→toast・明/暗）。
+  simplify=4エージェント + **codex review**（gpt-5.5）反映（`cargo install` 化・per-button aria-label・長コマンドの透け防止）。
+  ※ **Mac/Linux バイナリは未リリース**。install の Windows one-liner は GitHub Releases に実体（`latest`）が要る（未作成なら失敗）→ §1 の release 作成が次。
 - 設計は `apps/website/DESIGN.md`、ロジック正本は `packages/schema/SPEC.md`。
 
 ### 3. Phase 3b 残り（← (A) 実削除 完了・commit 済。次は (B) or (C)）
