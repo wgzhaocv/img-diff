@@ -34,8 +34,10 @@
 
 **▶ 再開時の次アクション（新しい chat はまずここを読む）**
 
-- **現状（すべて本番デプロイ済・最新 version `7db507e2`＝実削除込み・imgdiff.wgzhao.me 稼働）**:
+- **現状（すべて本番デプロイ済・最新 version `bfd3bbca`＝3b 残り込み・imgdiff.wgzhao.me 稼働）**:
   - **scan**（フォルダ重複検索）+ **compare**（2枚比較）が動作。全経路で **web dHash==CLI**。
+  - **前回フォルダ再スキャン**（idle に「前回のフォルダ」チップ→click 内 read 権限→キャッシュ突合で高速再スキャン）、
+    **scan-time キャッシュ GC**（列挙に無くなった path の hashes/thumbs 掃除）、**pixelSha256 golden**（native==wasm）を追加（commit `af529e9`・下記 §3）。
   - compare = 並べて / 境界スライダ / 差分ハイライト(canvas) + SSIM/PSNR/差分割合/ハミング等幅表示 + 段階進捗（読込→計算→差分）。
   - **ライブラリ化済**（ユーザー指摘「何でも手搓するな」[[prefer-libraries-not-handrolled]]）:
     ルーティング=**react-router v8**（`BrowserRouter`+`Routes`+`NavLink`・**URL は `#` なしのクリーンパス** `/compare` 等）、
@@ -45,9 +47,10 @@
   - catalog（root package.json）の **vite-plus/vite を `0.2.2` に固定**（`latest` が root/workspace で割れ、vite の
     Plugin 型が二重定義になり型崩れ→版固定で単一化。今後 `vp add` 後に型崩れしたらまずここを疑う）。
   - UI 文言は日本語（「査重」等の中国語は排除。scan タブ=「重複を探す」）。install ページは**未実装**（Phase 1 のプレースホルダ）。
-- **今やること = Phase 3b 残り。(A) 実削除は完了・commit 済・本番デプロイ済（version `7db507e2`・下の「### 3」参照）。**
-  次は (B) 保存 handle 復用 + 中断再開、または (C) 低リスクの小物。agent-browser で File[] 経路（削除ボタン無効化）は確認済み。
-  FS Access 経路の実削除は E2E 未検証のままユーザー指示で直接デプロイ（不具合が出たらこの経路を疑う）。
+- **今やること = Phase 4b（install ページ）。Phase 3b は完了**: (A) 実削除・(B) 前回フォルダ再スキャン・
+  (C-1) scan-time GC・(C-2) pixelSha256 golden すべて commit 済・本番デプロイ済（version `bfd3bbca`・下の「### 3」参照）。
+  **繰延べ**: (C-3) グループ仮想化・(C-4) shrink-on-load は「先に計測・実利が出てから」方針で未着手（§3 (C) 参照）。
+  FS Access 経路（実削除・前回フォルダ再スキャン・GC）は E2E 未検証のままユーザー指示で直接デプロイ（不具合が出たらこの経路を疑う）。
 - **検証環境（重要・更新）**: このセッションには **`agent-browser` skill が利用可能**（実ブラウザ駆動＝
   compare や FS Access もスクショ/操作で確認できる可能性あり。まず試す）。**`codex:setup`/`codex:rescue` skill も存在**
   （setup で CLI 準備を確認してから rescue を回す。以前「codex 未インストール」と記録したが skill 経路が来た）。
@@ -143,19 +146,30 @@ CLI `crates/cli/src/clean.rs`（SPEC §5.1）の安全モデルを踏襲。**破
   フォルダで大量削除時 O(D×深さ)。親ごとに handle を 1 回解決してグルーピング）② IDB 掃除を削除ループ後に 1〜2 txn でバッチ化。
   ③ `planDeletions` を crates/core へ寄せ wasm 共有（clusterGroup と同型・CLI/TS の規則 drift 防止）。
 
-**(B) 保存 handle 復用 + 中断再開（(A) と権限フロー共通）**
+**(B) 前回フォルダ再スキャン 完了（commit `af529e9`・本番デプロイ済 version `bfd3bbca`）**
 
-- 起動時に `getRoots()`（`roots` に dirHandle 永続済み・`resolveRoot` が putRoot 済み）から前回フォルダを提示 →
-  `queryPermission`→（click 内）`requestPermission`→ `scanFolder(handle)` はキャッシュ突合で高速再スキャン。
-- `jobs` ストア（db.ts に定義済・未使用）で `status!="done"` の未完了ジョブを検出 →「前回の続行」提示。
-  逐次 putHash 済みなので残りだけ hash。DESIGN §5「再開フロー」。
+ユーザー決定で **jobs は不使用**（完了/中断を区別せず、同じフォルダを再スキャンすれば hashes キャッシュで残りだけ埋まる）。
 
-**(C) 低リスクの小物（agent-browser/自前で検証しやすい）**
+- `ScanScreen` が mount 時 `getRoots()` で保存済みフォルダを読み、idle 画面に「前回のフォルダ」チップを提示。
+- クリック（ユーザー操作）内で `fsaccess.requestReadPermission`（`requestPermission({mode:"read"})`・reload 後の prompt 状態から昇格）
+  → granted なら既存 `runFolder(handle)`（`scanFolder`→`resolveRoot` の isSameEntry で同一 rootId 再利用・キャッシュ突合で高速）。
+  拒否/失効ハンドルは toast で通知（handleSavedRoot は try/catch 済）。File[] 経路は永続ハンドル無しなので非表示。DESIGN §5/§6.3。
+- **未実装のまま繰延べ**: `jobs` ストア（db.ts に型・スキーマだけ定義済・未使用）を使った「前回 N/M で中断、続行?」の明示提示。
+  現状は「同じフォルダをもう一度スキャン」で残りだけ埋まる方式で代替。
 
-- **キャッシュ GC/reconcile**: scan 時に列挙に無い（削除/移動された）path の hashes/thumbs を掃除。削除後にも呼ぶ。
-- **pixelSha256 byte golden**: `crates/wasm` に native==wasm の pixelSha256（`rgba_sha256`）一致テスト（要 mingw on PATH）。
-- **グループ仮想化**: 数千グループ時。`@tanstack/react-virtual`（ライブラリ・可変高）。実利が出てから。
-- **shrink-on-load（DESIGN §7.1）**: 1 パス目を縮小デコードで高速化。導入時 **dHash parity(golden) を必ず再実行**。「先に計測」方針。
+**(C) 低リスクの小物**
+
+- **(C-1) キャッシュ GC/reconcile 完了（commit `af529e9`）**: `scanFolder` が列挙に無くなった path の hashes/thumbs を
+  `db.gcOrphans`（1 txn バッチ）で掃除。**空列挙ガード**（`files.length>0`）で権限喪失時の全消去を防止。present 判定は
+  「列挙に在ったか(`files`)」基準（getFile 失敗の既存ファイルを誤 GC しない）。実削除後の reconcile（`clean.ts::applyDeletions`）も
+  `gcOrphans` に統合し `deleteHash`/`deleteThumb` を廃止（掃除経路を 1 本化＝TODO §3(A)② のバッチ化も達成）。
+- **(C-2) pixelSha256 byte golden 完了（commit `af529e9`）**: `sha256_hex` を `crates/core/src/hash.rs` に集約
+  （CLI `util::sha256_hex` は core へ委譲・`sha2` を core 1 箇所へ＝unused dep 解消。TODO §3(A)③ の drift 防止も達成）。
+  `crates/wasm` の `parity_vectors` に「白平坦化後 RGBA の SHA-256」行を追加し GOLDEN で native==wasm を固定
+  （`cargo test -p imgdiff-wasm` + `wasm-pack test --node` 双方緑・要 mingw on PATH）。
+- **(C-3) グループ仮想化（繰延べ）**: 数千グループ時。`@tanstack/react-virtual`（未導入・可変高）。実利が出てから。
+- **(C-4) shrink-on-load（DESIGN §7.1・繰延べ）**: 1 パス目を縮小デコードで高速化。差し替え点は `workers/vips.ts::decodeCanonical`
+  の `newFromBuffer` 第2引数（1 パス目のみ・2 パス目/compare は全分解能必須）。導入時 **dHash+sha parity(golden) を必ず再実行**。「先に計測」方針。
 
 ## ビルド/実行メモ（windows-gnu）
 
