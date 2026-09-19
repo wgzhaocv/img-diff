@@ -25,10 +25,30 @@
 
 ## 次の手（優先順）
 
-### 1. 配布の残り（Windows パッケージ + 自己更新チェーンは完了）
+### 1. 配布（Windows 完了・macOS 完了(pre-release)・Linux 未着手）
 
-- **web の install ページで OS を選ばせ対応スクリプトを出す**（CLI は GitHub Releases の zip、skill は `npx skills add github:wgzhaocv/img-diff`）。web 本体と一緒に。
-- Linux/Mac パッケージ + それらの release（Mac は Mac/CI）。自己更新チェーンは同機構でそのまま載る（target を manifest に足すだけ）。
+- **web の install ページ**: 完了（Phase 4b）。macOS タブはプレビルド配布（`curl | bash`）に差し替え済み。
+- **macOS パッケージ 完了（v0.1.5 / `aarch64-apple-darwin`）**: `scripts/package-macos.sh`。
+  `dylibbundler` で dylib 閉包（76 個 / 55MB）を集めて `@executable_path/../lib` へ書き換え + ad-hoc 署名、
+  `vips-heif` / `vips-jxl` モジュール同梱、`ditto -c -k --keepParent` で zip。
+  **macOS 26+ / Apple Silicon 専用**（Homebrew ボトルの `LC_BUILD_VERSION minos` が 26.0 のため。
+  それより古い macOS では dyld が読み込みを拒否する）。導入は `apps/website/public/install.sh`。
+  - **macOS 固有の要点（触る前に読む）**: libvips は macOS で自分の位置を知れず、
+    **ビルド時プレフィックスが argv0 より先に試される** → 何もしないと同梱 libvips が
+    `/opt/homebrew/Cellar` 側のモジュールを dlopen し **1 プロセスに libvips が 2 つ**載る。
+    `decode.rs::set_bundled_vipshome` が VIPSHOME で束ルートへ向けて断つ。検証は PATH を剥がすだけでは
+    **不十分**（dlopen は PATH と無関係）。`DYLD_PRINT_LIBRARIES=1` で libvips の像が 1 つか数えること。
+  - **繰延べ**: fontconfig の設定パス（`/opt/homebrew/etc/fonts`）は同梱していないので、
+    `render` で**文字入り SVG** を描くとフォントが代替される。scan/compare/HEIC には影響なし。
+- **▶ 次にやる収尾（Windows 機で）**: `scripts/package-windows.sh` で 0.1.5 の Windows zip を作る →
+  `scripts/merge-manifest.sh` で 2 target の `manifest.json` を合成 → v0.1.5 の **pre-release を解除** →
+  `apps/website/public/install.sh` の `BASE` を `releases/latest/download` に戻し、
+  `InstallScreen.tsx` の `MACOS_RELEASE_URL` を `RELEASES_URL` に統一。
+  **それまで `releases/latest` は v0.1.4 のまま**＝ Windows の導入と自己更新は無傷。
+- **Linux パッケージ 未着手**。install ページは `cargo install` 案内のまま。
+- **CI 化（未着手・macOS の被覆を広げるため）**: この repo にはまだ workflow が 1 つも無い。
+  `macos-15` runner で焼けば macOS 15+ を、`macos-13` なら Intel 版も賄える。
+  `scripts/package-macos.sh` はそのまま載る（brew install vips libheif dylibbundler を足すだけ）。
 
 ### 2. web（Phase 0〜3b サムネまで完了・commit 済。scan は実用レベルで動作）
 

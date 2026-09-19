@@ -545,7 +545,7 @@ dependencies = [
 
 [[package]]
 name = "imgdiff"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -566,7 +566,7 @@ dependencies = [
 
 [[package]]
 name = "imgdiff-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "image",
  "serde",
@@ -575,7 +575,7 @@ dependencies = [
 
 [[package]]
 name = "imgdiff-wasm"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "imgdiff-core",
  "serde-wasm-bindgen",

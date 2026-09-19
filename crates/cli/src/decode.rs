@@ -75,6 +75,38 @@ pub fn vips_version_string() -> String {
 static INIT: Once = Once::new();
 static INIT_OK: AtomicBool = AtomicBool::new(false);
 
+/// 同梱パッケージで実行されているなら `VIPSHOME` を束ルートへ向ける（`vips_init` の**前**に呼ぶ）。
+///
+/// libvips の `vips_guess_prefix()` は **VIPSHOME → ビルド時プレフィックス → argv0** の順で前置を決め、
+/// モジュールは `<prefix>/lib/vips-modules-<major>.<minor>` から読む。ビルド時プレフィックスは
+/// argv0 より **先** に試されるため、同じ版の libvips が既定の場所（Homebrew 等）にも入っている環境では
+/// 同梱 libvips が**システム側のモジュール**を dlopen し、1 プロセスに libvips が 2 つ載る。
+/// これを断てるのは VIPSHOME だけなので、束レイアウトのときは明示的に設定する。
+///
+/// ただし VIPSHOME は libvips 側で**実在検査も後退もされない**（指した先が無ければモジュール無しになる）。
+/// そこで設定条件を 3 つに絞る: ①利用者が自分で設定していない ②`bin/` レイアウト ③モジュール
+/// ディレクトリが実在する。③ が無いと `~/.cargo/bin/imgdiff`（`cargo install` 導入）で誤検出し、
+/// 本来使えていたシステムのモジュールを塞いでしまう。
+///
+/// **前提: 他のスレッドを 1 つも作る前に呼ぶこと。** `set_var` はプロセス全体を触るので、並行して
+/// `getenv` する者が居ると未定義動作になる。現状の呼び出し位置（`main` → `decode::init()`）は
+/// rayon のプール生成にも indicatif の tick スレッドにも先行している。
+/// （edition 2024 へ移行する際、`set_var` は `unsafe` で包む必要がある。）
+fn set_bundled_vipshome() {
+    if std::env::var_os("VIPSHOME").is_some() {
+        return;
+    }
+    let Some(root) = crate::util::bundle_root() else {
+        return;
+    };
+    // 版は実行時に問い合わせる（vips_version は vips_init 前でも使える定数）。
+    let modules = unsafe { format!("vips-modules-{}.{}", vips_version(0), vips_version(1)) };
+    if !root.join("lib").join(&modules).is_dir() {
+        return;
+    }
+    std::env::set_var("VIPSHOME", &root);
+}
+
 /// libvips を 1 度だけ初期化する。vips 内部スレッドは 1（並列はファイル単位に rayon で行う）。
 /// 失敗時は以後のデコードがエラーになる。main から起動時に呼ぶ。
 pub fn init() -> Result<()> {
@@ -89,7 +121,14 @@ pub fn init() -> Result<()> {
                 std::ptr::null_mut(),
             );
         }
-        let argv0 = CString::new("imgdiff").unwrap();
+        set_bundled_vipshome();
+        // argv0 は実行ファイルの絶対パスを渡す（libvips の前置推定の最後の手がかり。PATH 上に無い
+        // 置き方でも効くようにする）。推定結果は libvips 側で実在検査されるので、非同梱の導入
+        // （cargo install 等）では自動的にビルド時プレフィックスへ戻る＝害がない。
+        let argv0 = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.to_str().and_then(|s| CString::new(s).ok()))
+            .unwrap_or_else(|| CString::new("imgdiff").unwrap());
         let ok = unsafe { vips_init(argv0.as_ptr()) == 0 };
         if ok {
             unsafe { vips_concurrency_set(1) };
@@ -101,7 +140,7 @@ pub fn init() -> Result<()> {
     } else {
         Err(CliError::new(
             "decode_error",
-            "libvips の初期化に失敗しました（libvips ランタイムが見つかりません: 同梱 DLL を実行ファイルと同じ場所に置くか PATH に通してください）",
+            "libvips の初期化に失敗しました（libvips ランタイムが見つかりません: 配布パッケージを展開して使うか、libvips を導入してください）",
         )
         .into())
     }

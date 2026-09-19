@@ -3,6 +3,7 @@
 //! 短いタイムアウト、失敗は全て沈黙（fail-open）。呼び出しは **text モードのコマンド成功後のみ**
 //! （JSON 出力を汚さない）。ネット/JSON はこのモジュールだけ。
 
+use crate::util;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -31,7 +32,9 @@ pub fn maybe_notify() {
         return;
     };
     let current = env!("CARGO_PKG_VERSION");
-    if latest != current {
+    // 「違えば通知」ではなく「**新しければ**通知」。プラットフォームごとにリリース時期がずれると
+    // `releases/latest` が手元より古いことがあり、単純な不一致では降格を勧めてしまう。
+    if util::is_newer(&latest, current) {
         eprintln!(
             "\n新しい版 {latest} があります（現在 {current}）。`imgdiff update` で更新できます。"
         );

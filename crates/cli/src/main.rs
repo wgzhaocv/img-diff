@@ -22,8 +22,24 @@ mod version_check;
 
 use output::OutputFormat;
 
+/// `--version` の出力。**配布 target を含める**のは、パッケージ用スクリプトが zip 名と
+/// manifest の `target` をここから取るため（`rustc -vV` の host から別途導出すると、
+/// クロスビルド時に `update.rs::TARGET` と食い違って自己更新が恒久的に失敗する）。
+/// `-V` は短い方（`imgdiff <version>`）のまま。
+const LONG_VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (",
+    env!("IMGDIFF_TARGET"),
+    ")"
+);
+
 #[derive(Parser)]
-#[command(name = "imgdiff", version, about = "重複・類似画像を検索する")]
+#[command(
+    name = "imgdiff",
+    version,
+    long_version = LONG_VERSION,
+    about = "重複・類似画像を検索する"
+)]
 struct Cli {
     /// 出力形式（env: IMGDIFF_OUTPUT）。auto=端末は text・パイプ/捕捉は json（AI 向け）
     #[arg(

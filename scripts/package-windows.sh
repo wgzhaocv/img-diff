@@ -20,8 +20,13 @@ export PATH="$MINGW:$PATH"
 echo "=== build (release) ===" >&2
 cargo build --release -p imgdiff >&2
 
-VERSION="$(target/release/imgdiff.exe --version | awk '{print $2}')"
-echo "=== packaging imgdiff $VERSION ===" >&2
+# version と target は**実行ファイル自身に聞く**（`--version` は "imgdiff <ver> (<target>)"）。
+# target を `rustc -vV` の host から別途導出すると、クロスビルド時に実行ファイルへ埋めた
+# IMGDIFF_TARGET と食い違い、その環境の `imgdiff update` が恒久的に manifest を引けなくなる。
+read -r _ VERSION TARGET <<<"$(target/release/imgdiff.exe --version)"
+TARGET="${TARGET#(}"
+TARGET="${TARGET%)}"
+echo "=== packaging imgdiff $VERSION ($TARGET) ===" >&2
 
 OUT="target/win-package"
 BUNDLE="$OUT/imgdiff"
@@ -50,21 +55,13 @@ done
 echo "=== 同梱 DLL: ${#seen[@]} / bundle: $(du -sh "$BUNDLE" | cut -f1) ===" >&2
 
 # zip は Windows の Compress-Archive で確実に作る（cygpath で Windows パスへ変換）。
-ZIP_NAME="imgdiff-$VERSION-x86_64-pc-windows-gnu.zip"
+ZIP_NAME="imgdiff-$VERSION-$TARGET.zip"
 WIN_BUNDLE="$(cygpath -w "$PWD/$BUNDLE")"
 WIN_ZIP="$(cygpath -w "$PWD/$OUT/$ZIP_NAME")"
 powershell.exe -NoProfile -Command "Compress-Archive -Path '$WIN_BUNDLE' -DestinationPath '$WIN_ZIP' -Force" >&2
 
-# manifest.json（release アセットとして同梱。`imgdiff update` が target→zip名+sha256 を引く）。
-SHA="$(sha256sum "$OUT/$ZIP_NAME" | awk '{print $1}')"
-cat > "$OUT/manifest.json" <<EOF
-{
-  "version": "$VERSION",
-  "targets": [
-    { "target": "x86_64-pc-windows-gnu", "asset": "$ZIP_NAME", "sha256": "$SHA" }
-  ]
-}
-EOF
-echo "manifest: $OUT/manifest.json (sha256 $SHA)" >&2
+# target ごとの manifest 断片。リリース用の manifest.json は merge-manifest.sh が全 target を束ねて作る
+# （各 target が manifest.json を直接書くと、同じ release で後からアップロードした方が相手を消す）。
+bash scripts/emit-manifest-fragment.sh "$OUT" "$ZIP_NAME" "$VERSION" "$TARGET"
 
 echo "$OUT/$ZIP_NAME"

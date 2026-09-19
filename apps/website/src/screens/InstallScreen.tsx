@@ -6,9 +6,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { CopyBlock } from "@/components/CopyBlock";
 
-// インストーラ・リリースの実 URL（配布は Windows のみ・Mac/Linux は近日）。
-const INSTALL_URL = "https://imgdiff.wgzhao.me/install.ps1";
+// インストーラ・リリースの実 URL。プレビルド配布は Windows と macOS(Apple Silicon)。Linux は未対応。
+const INSTALL_PS1_URL = "https://imgdiff.wgzhao.me/install.ps1";
+const INSTALL_SH_URL = "https://imgdiff.wgzhao.me/install.sh";
 const RELEASES_URL = "https://github.com/wgzhaocv/img-diff/releases/latest";
+// macOS 版は Windows 版より先行しているため pre-release（= `releases/latest` に出てこない）。
+// タグを直接指す。**Windows 版が揃って正式リリースへ昇格したら RELEASES_URL に統一する。**
+// tag が古いまま発版すると無言で古い版を案内するので、scripts/package-macos.sh が
+// 「このファイルの tag == パッケージの版」を毎回検査して止める（public/install.sh も同様）。
+const MACOS_RELEASE_URL = "https://github.com/wgzhaocv/img-diff/releases/tag/v0.1.5";
 
 type OS = "windows" | "macos" | "linux";
 const OS_TABS: { value: OS; label: string }[] = [
@@ -17,7 +23,7 @@ const OS_TABS: { value: OS; label: string }[] = [
   { value: "linux", label: "Linux" },
 ];
 
-// 実行環境から OS を推定して既定タブにする。判定不能は Windows（唯一の実配布）へ倒す。
+// 実行環境から OS を推定して既定タブにする。判定不能は Windows（最も広く配布している方）へ倒す。
 // （モバイル UA は mac/linux 側に寄るが、配布は desktop のみなので実害はない。）
 function detectOS(): OS {
   if (typeof navigator === "undefined") return "windows";
@@ -27,16 +33,26 @@ function detectOS(): OS {
   return "windows";
 }
 
-// Mac/Linux はプレビルド未配布 → ソースからビルドを案内（Windows 以外で共通）。
-function BuildFromSource() {
+// ソースからのビルド案内。Linux（プレビルド未配布）と、macOS の対象外環境
+// （Intel Mac・macOS 25 以前）で共有する。理由書きは呼び出し側が JSX で渡す。
+function BuildFromSource({ children }: { children: React.ReactNode }) {
   return (
-    <div className="space-y-3 pt-2">
-      <p className="text-sm text-muted-foreground">
-        プレビルドのバイナリ配布は近日対応。現在はソースからビルドしてください（要 libvips +
-        libheif）。
-      </p>
+    <div className="space-y-3">
+      <p className="text-sm text-muted-foreground">{children}</p>
       <CopyBlock command="cargo install --git https://github.com/wgzhaocv/img-diff imgdiff" />
     </div>
+  );
+}
+
+// GitHub Releases への導線（Windows / macOS タブで共用。違うのは行き先だけ）。
+function ReleaseZipLink({ href }: { href: string }) {
+  return (
+    <Button variant="outline" size="sm" asChild className="gap-1.5">
+      <a href={href} target="_blank" rel="noreferrer">
+        <Download className="size-4" />
+        手動で zip を取得（GitHub Releases）
+      </a>
+    </Button>
   );
 }
 
@@ -67,28 +83,53 @@ export function InstallScreen() {
             </TabsList>
 
             <TabsContent value="windows" className="space-y-4 pt-2">
-              <CopyBlock label="PowerShell（推奨）" command={`irm ${INSTALL_URL} | iex`} />
+              <CopyBlock label="PowerShell（推奨）" command={`irm ${INSTALL_PS1_URL} | iex`} />
               <CopyBlock
                 label="コマンドプロンプト"
-                command={`powershell -c "irm ${INSTALL_URL} | iex"`}
+                command={`powershell -c "irm ${INSTALL_PS1_URL} | iex"`}
               />
               <p className="text-sm text-muted-foreground">
                 PowerShell 5.1+ 対応。同梱 DLL で MSYS2
                 などの別途導入は不要。再実行すると最新版へ更新されます。
               </p>
-              <Button variant="outline" size="sm" asChild className="gap-1.5">
-                <a href={RELEASES_URL} target="_blank" rel="noreferrer">
-                  <Download className="size-4" />
-                  手動で zip を取得（GitHub Releases）
-                </a>
-              </Button>
+              <ReleaseZipLink href={RELEASES_URL} />
             </TabsContent>
 
-            <TabsContent value="macos">
-              <BuildFromSource />
+            <TabsContent value="macos" className="space-y-4 pt-2">
+              <CopyBlock
+                label="ターミナル（推奨）"
+                command={`curl -fsSL ${INSTALL_SH_URL} | bash`}
+              />
+              <p className="text-sm text-muted-foreground">
+                同梱 dylib で Homebrew の libvips は不要（HEIC / AVIF / JXL も読めます）。
+                再実行すると最新版へ更新されます。
+                <br />
+                対象は{" "}
+                <strong className="font-medium text-foreground">
+                  Apple Silicon・macOS 26 以降
+                </strong>
+                。それ以外では下のソースビルドを使ってください。
+              </p>
+              <div className="space-y-1.5">
+                <ReleaseZipLink href={MACOS_RELEASE_URL} />
+                <p className="text-sm text-muted-foreground">
+                  ブラウザで落とした zip には隔離属性が付くため、展開後に{" "}
+                  <code className="font-mono text-foreground">
+                    xattr -dr com.apple.quarantine &lt;展開先&gt;
+                  </code>{" "}
+                  が要ります。
+                </p>
+              </div>
+              <BuildFromSource>
+                Intel Mac / macOS 25 以前はソースからビルドしてください（先に{" "}
+                <code className="font-mono text-foreground">brew install vips libheif</code>）。
+              </BuildFromSource>
             </TabsContent>
-            <TabsContent value="linux">
-              <BuildFromSource />
+            <TabsContent value="linux" className="pt-2">
+              <BuildFromSource>
+                Linux のプレビルド配布は未対応。ソースからビルドしてください（要 libvips +
+                libheif）。
+              </BuildFromSource>
             </TabsContent>
           </Tabs>
 
