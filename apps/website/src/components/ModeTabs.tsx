@@ -1,15 +1,16 @@
-import { Images, ScanSearch, type LucideIcon } from "lucide-react";
+import { Images, Replace, ScanSearch, type LucideIcon } from "lucide-react";
 import { useLocation, useNavigate } from "react-router";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 
-type ModeValue = "scan" | "compare";
+type ModeValue = "scan" | "compare" | "convert";
 type Mode = { value: ModeValue; label: string; Icon: LucideIcon };
 
 // モード定義は 1 箇所（desktop / mobile の二重定義を避ける）。
 const MODES: Mode[] = [
   { value: "scan", label: "重複を探す", Icon: ScanSearch },
   { value: "compare", label: "2枚を比較", Icon: Images },
+  { value: "convert", label: "形式を変換", Icon: Replace },
 ];
 
 type Props = {

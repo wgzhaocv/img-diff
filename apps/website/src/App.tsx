@@ -6,6 +6,7 @@ import { Logo } from "@/components/Logo";
 import { ModeTabs } from "@/components/ModeTabs";
 import { useTheme } from "@/lib/theme";
 import { ScanScreen } from "@/screens/ScanScreen";
+import { ConvertScreen } from "@/screens/ConvertScreen";
 import { CompareScreen } from "@/screens/CompareScreen";
 import { InstallScreen } from "@/screens/InstallScreen";
 
@@ -59,6 +60,7 @@ export function App() {
         <Routes>
           <Route path="/scan" element={<ScanScreen />} />
           <Route path="/compare" element={<CompareScreen />} />
+          <Route path="/convert" element={<ConvertScreen />} />
           <Route path="/install" element={<InstallScreen />} />
           <Route path="*" element={<Navigate to="/scan" replace />} />
         </Routes>

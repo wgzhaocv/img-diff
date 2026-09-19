@@ -28,11 +28,33 @@ function copyWasmVips(): PluginOption {
   };
 }
 
+/**
+ * dev サーバで `/vips/*` への `?import` 付き要求を素のパスへ戻す。
+ *
+ * 動的 import（`workers/vips.ts` の `/vips/vips-es6.js`）に対し、Vite の dev は解析のため
+ * URL へ `?import` を付ける。ところが public ディレクトリを配る中間件はクエリ付きに一致せず、
+ * SPA の index.html が返ってしまう ⇒ `Failed to fetch dynamically imported module` となり
+ * **dev では scan / compare / convert の全部が動かない**（本番はクエリが付かないので無傷）。
+ * ソース側の `@vite-ignore` 注釈は「解析するな」の指示であって、この URL 書き換えは止められない。
+ */
+function serveVipsInDev(): PluginOption {
+  return {
+    name: "serve-vips-in-dev",
+    apply: "serve",
+    configureServer(server) {
+      server.middlewares.use((req, _res, next) => {
+        if (req.url?.startsWith("/vips/")) req.url = req.url.split("?")[0];
+        next();
+      });
+    },
+  };
+}
+
 // img-diff web フロント。React + Tailwind v4 + shadcn/ui + wasm（crates/wasm）+ wasm-vips。
 // dev サーバでも COOP/COEP を付け cross-origin isolation を有効化する
 // （SharedArrayBuffer が要る wasm-vips のため。本番は public/_headers で付与）。
 export default defineConfig({
-  plugins: [react(), tailwindcss(), copyWasmVips()],
+  plugins: [react(), tailwindcss(), copyWasmVips(), serveVipsInDev()],
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
