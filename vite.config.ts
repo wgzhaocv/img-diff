@@ -1,6 +1,13 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite-plus";
 
 export default defineConfig({
+  // `vp test` はリポジトリ根の設定で走るので、apps/website の `@/` 別名をここにも持たせる
+  // （持たせないと apps/website/tests/* から src を import した瞬間に解決できない）。
+  // apps/website/vite.config.ts 側の別名とは別物なので、片方だけ変えないこと。
+  resolve: {
+    alias: { "@": fileURLToPath(new URL("./apps/website/src", import.meta.url)) },
+  },
   staged: {
     "*": "vp check --fix",
   },

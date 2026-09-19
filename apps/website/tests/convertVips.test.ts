@@ -1,0 +1,213 @@
+// convert の**実際の画素操作**（SPEC §5.4）を、本物の wasm-vips で回して検証する。
+// `applyConvert` は vips 実体を引数で受けるので、ブラウザ用の `getVips()`（/vips/*.js を URL で読む）
+// を経由せず、node 版の wasm-vips を直接渡して同じコードを走らせられる。
+//
+// ここが守るのは「計画（convertPlan）が正しく vips 操作へ写っているか」。
+// 計画そのものの算術は convertPlan.test.ts 側。
+
+import { beforeAll, describe, expect, it } from "vite-plus/test";
+import type { ConvertOptions } from "schema";
+import { applyConvert, type Vips } from "@/workers/vips";
+
+let vips: Vips;
+/** 1024x1024 相当を避けて軽く回すための合成画像（左半分が濃い色・右半分が暗い色）。 */
+let squarePng: ArrayBuffer;
+let widePng: ArrayBuffer;
+
+type VipsNode = {
+  Image: {
+    newFromBuffer(data: Uint8Array): { writeToBuffer(s: string): Uint8Array; delete(): void };
+    newFromMemory(
+      data: Uint8Array,
+      w: number,
+      h: number,
+      bands: number,
+      fmt: string,
+    ): { writeToBuffer(s: string): Uint8Array; delete(): void };
+  };
+  concurrency(n: number): void;
+};
+
+/** 左半分 (200,100,50) / 右半分 (10,20,30) の RGB 画像を PNG バイト列で作る。 */
+function makePng(v: VipsNode, w: number, h: number): ArrayBuffer {
+  const buf = new Uint8Array(w * h * 3);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 3;
+      const left = x < w / 2;
+      buf[i] = left ? 200 : 10;
+      buf[i + 1] = left ? 100 : 20;
+      buf[i + 2] = left ? 50 : 30;
+    }
+  }
+  const im = v.Image.newFromMemory(buf, w, h, 3, "uchar");
+  const png = im.writeToBuffer(".png");
+  im.delete();
+  return png.slice().buffer as ArrayBuffer;
+}
+
+beforeAll(async () => {
+  // node 版のエントリを直接読む（ブラウザ版は /vips/ の URL を前提にしていて node では動かない）。
+  const mod = (await import("wasm-vips")) as unknown as {
+    default: (cfg?: Record<string, unknown>) => Promise<VipsNode>;
+  };
+  const v = await mod.default({ dynamicLibraries: ["vips-heif.wasm", "vips-jxl.wasm"] });
+  v.concurrency(1);
+  vips = v as unknown as Vips;
+  squarePng = makePng(v, 100, 100);
+  widePng = makePng(v, 100, 50);
+}, 60_000);
+
+const defaults: ConvertOptions = {
+  width: null,
+  height: null,
+  fit: "cover",
+  gravity: "center",
+  background: "ffffff",
+  format: null,
+  quality: 80,
+};
+
+/** 出力バイト列を読み直して寸法とバンド数を見る。 */
+function inspect(out: Uint8Array): { width: number; height: number; bands: number } {
+  const v = vips as unknown as {
+    Image: {
+      newFromBuffer(d: Uint8Array): {
+        width: number;
+        height: number;
+        bands: number;
+        delete(): void;
+      };
+    };
+  };
+  const im = v.Image.newFromBuffer(out);
+  const r = { width: im.width, height: im.height, bands: im.bands };
+  im.delete();
+  return r;
+}
+
+describe("出力形式", () => {
+  it("書ける形式をすべて往復できる（jxl / avif を含む）", () => {
+    for (const format of ["jpg", "png", "webp", "gif", "tiff", "ppm", "avif", "jxl"]) {
+      const r = applyConvert(vips, squarePng, { ...defaults, format }, "png");
+      expect(r.format, format).toBe(format);
+      expect(r.out.byteLength, format).toBeGreaterThan(0);
+      expect(inspect(r.out).width, format).toBe(100);
+    }
+  });
+
+  it("別名は正規化される（jpeg → jpg / tif → tiff）", () => {
+    expect(applyConvert(vips, squarePng, { ...defaults, format: "jpeg" }, "png").format).toBe(
+      "jpg",
+    );
+    expect(applyConvert(vips, squarePng, { ...defaults, format: "tif" }, "png").format).toBe(
+      "tiff",
+    );
+  });
+
+  it("heic は書けない（SPEC §5.4 でやらないと決めた形式）", () => {
+    expect(() => applyConvert(vips, squarePng, { ...defaults, format: "heic" }, "png")).toThrow();
+  });
+
+  it("gif / ppm は Q を付けずに書ける（付けると libvips が失敗する）", () => {
+    for (const format of ["gif", "ppm"]) {
+      expect(() =>
+        applyConvert(vips, squarePng, { ...defaults, format, quality: 50 }, "png"),
+      ).not.toThrow();
+    }
+  });
+});
+
+describe("fit ごとの実寸法", () => {
+  it("cover は目標ちょうど", () => {
+    const r = applyConvert(vips, widePng, { ...defaults, width: 40, height: 30 }, "png");
+    expect(inspect(r.out)).toMatchObject({ width: 40, height: 30 });
+  });
+
+  it("contain も目標ちょうど（余白は背景で埋まる）", () => {
+    const r = applyConvert(
+      vips,
+      widePng,
+      { ...defaults, width: 40, height: 30, fit: "contain" },
+      "png",
+    );
+    expect(inspect(r.out)).toMatchObject({ width: 40, height: 30 });
+  });
+
+  it("fill は非等比に引き伸ばす", () => {
+    const r = applyConvert(
+      vips,
+      widePng,
+      { ...defaults, width: 50, height: 40, fit: "fill" },
+      "png",
+    );
+    expect(inspect(r.out)).toMatchObject({ width: 50, height: 40 });
+  });
+
+  it("拡大はしない（目標が大きくても元の寸法のまま）", () => {
+    const r = applyConvert(vips, widePng, { ...defaults, width: 500, height: 500 }, "png");
+    expect(inspect(r.out)).toMatchObject({ width: 100, height: 50 });
+  });
+});
+
+describe("contain の背景", () => {
+  it("transparent は alpha を足して角が透明になる", () => {
+    const r = applyConvert(
+      vips,
+      widePng,
+      { ...defaults, width: 40, height: 30, fit: "contain", background: "transparent" },
+      "png",
+    );
+    expect(inspect(r.out).bands).toBe(4);
+  });
+
+  it("hex 背景では alpha を増やさない（3 バンドのまま）", () => {
+    const r = applyConvert(
+      vips,
+      widePng,
+      { ...defaults, width: 40, height: 30, fit: "contain", background: "ff0000" },
+      "png",
+    );
+    expect(inspect(r.out).bands).toBe(3);
+  });
+
+  it("average 背景でも破綻しない", () => {
+    const r = applyConvert(
+      vips,
+      widePng,
+      { ...defaults, width: 40, height: 30, fit: "contain", background: "average" },
+      "png",
+    );
+    expect(inspect(r.out)).toMatchObject({ width: 40, height: 30, bands: 3 });
+  });
+});
+
+describe("gravity", () => {
+  // 100x50 を 40x30 に cover → 中間 60x30 から横に 20px 余る。
+  // 左半分が (200,100,50)・右半分が (10,20,30) なので、west は明るく east は暗い。
+  const meanOf = (out: Uint8Array): number => {
+    const v = vips as unknown as {
+      Image: { newFromBuffer(d: Uint8Array): { avg(): number; delete(): void } };
+    };
+    const im = v.Image.newFromBuffer(out);
+    const a = im.avg();
+    im.delete();
+    return a;
+  };
+
+  it("west は左側（明るい方）、east は右側（暗い方）を切り出す", () => {
+    const west = applyConvert(
+      vips,
+      widePng,
+      { ...defaults, width: 40, height: 30, gravity: "west" },
+      "png",
+    );
+    const east = applyConvert(
+      vips,
+      widePng,
+      { ...defaults, width: 40, height: 30, gravity: "east" },
+      "png",
+    );
+    expect(meanOf(west.out)).toBeGreaterThan(meanOf(east.out));
+  });
+});

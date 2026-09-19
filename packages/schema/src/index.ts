@@ -292,5 +292,87 @@ export interface RenderReport {
   stats: RenderStats;
 }
 
-/** scan / compare / clean / find / render をまとめた最上位型（--json / レポート） */
-export type Report = ScanReport | CompareResult | CleanReport | FindReport | RenderReport;
+/** convert の寸法合わせ方（SPEC §5.4）。`w` と `h` が両方在るときだけ効く */
+export type ConvertFit = "cover" | "contain" | "fill";
+
+/** convert の切り出し / 余白の寄せ先（SPEC §5.4）。`fit` が効くときだけ意味を持つ */
+export type ConvertGravity =
+  | "center"
+  | "north"
+  | "south"
+  | "east"
+  | "west"
+  | "northeast"
+  | "northwest"
+  | "southeast"
+  | "southwest";
+
+/**
+ * convert の引数（SPEC §5.4）。**解決後の値**（既定を当てはめ、`quality` は 1..100 に丸めた後）を入れる。
+ * `background` は `"transparent"` / `"average"` / 6 桁 hex のいずれか。
+ */
+export interface ConvertOptions {
+  /** 目標幅。未指定なら null */
+  width: number | null;
+  /** 目標高。未指定なら null */
+  height: number | null;
+  fit: ConvertFit;
+  gravity: ConvertGravity;
+  background: string;
+  /** 出力形式（別名正規化後）。入力と同じでよいなら null */
+  format: string | null;
+  /** 1..100。形式によっては無視される（gif / ppm） */
+  quality: number;
+}
+
+/** convert の 1 件の結果の状態 */
+export type ConvertStatus = "converted" | "skipped" | "failed";
+
+/** convert の 1 件（1 入力 → 1 出力）。src は入力ルート相対、dst は出力先ルート相対 */
+export interface ConvertItem {
+  src: string;
+  dst: string;
+  /** 出力の幅・高さ。失敗時は 0 */
+  width: number;
+  height: number;
+  /** 出力のバイト数。converted 以外は 0 */
+  bytes: number;
+  status: ConvertStatus;
+  /** failed のときのみ理由 */
+  error?: string;
+}
+
+export interface ConvertStats {
+  scanned: number;
+  converted: number;
+  skipped: number;
+  failed: number;
+  elapsedMs: number;
+}
+
+/**
+ * convert（寸法・形式の変換）の結果（SPEC.md §5.4）。
+ * imgdiff の本分（重複検出）とは別の補助ツール。非破壊（入力は決して変更しない）。
+ */
+export interface ConvertReport {
+  schemaVersion: typeof SCHEMA_VERSION;
+  kind: "convert";
+  producer: Producer;
+  /** 入力ルート（ディレクトリ or 単一ファイル） */
+  root: string;
+  createdAt: string;
+  /** 適用した引数（既定解決後） */
+  options: ConvertOptions;
+  /** items は src の昇順（決定性・SPEC §4） */
+  items: ConvertItem[];
+  stats: ConvertStats;
+}
+
+/** scan / compare / clean / find / render / convert をまとめた最上位型（--json / レポート） */
+export type Report =
+  | ScanReport
+  | CompareResult
+  | CleanReport
+  | FindReport
+  | RenderReport
+  | ConvertReport;

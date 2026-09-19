@@ -2,6 +2,16 @@
 // 2 層分離を JS 側でも踏襲し、scan（hash.worker）と compare（Phase 4）で decode→RGBA を共有する。
 // 白平坦化・dHash（手順 4〜8）はしない。呼び出し側が core（imgdiff-wasm）で行う。
 
+import type { ConvertOptions } from "schema";
+import {
+  BG_AVERAGE,
+  BG_TRANSPARENT,
+  normalizeOutFormat,
+  parseHexRgb,
+  planGeometry,
+  suffixFor,
+} from "@/lib/convertPlan";
+
 // --- wasm-vips の最小型（/vips/vips-es6.js を動的 import するため自前定義）。 ---
 type VipsImage = {
   autorot(): VipsImage;
@@ -10,7 +20,21 @@ type VipsImage = {
   cast(format: string): VipsImage;
   premultiply(): VipsImage;
   unpremultiply(): VipsImage;
-  resize(scale: number): VipsImage;
+  resize(scale: number, options?: { vscale?: number }): VipsImage;
+  /** 切り出し（左上原点）。convert の cover で使う。 */
+  extractArea(left: number, top: number, width: number, height: number): VipsImage;
+  /** 1 バンドだけ取り出す。convert の bg=average で使う。 */
+  extractBand(band: number): VipsImage;
+  /** 画布へ置いて周囲を埋める。convert の contain で使う。 */
+  embed(
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    options?: { extend?: string; background?: number[] },
+  ): VipsImage;
+  /** 全画素の平均値（1 バンドに対して呼ぶ）。 */
+  avg(): number;
   writeToMemory(): Uint8Array;
   writeToBuffer(suffix: string): Uint8Array;
   readonly width: number;
@@ -18,7 +42,8 @@ type VipsImage = {
   readonly bands: number;
   delete(): void;
 };
-type Vips = {
+/** wasm-vips の実体（テストは node 版を直接読んで渡す）。 */
+export type Vips = {
   Image: { newFromBuffer(data: Uint8Array, strOptions?: string): VipsImage };
   concurrency(n: number): void;
 };
@@ -37,8 +62,10 @@ export function getVips(): Promise<Vips> {
       const mod = (await import(/* @vite-ignore */ vipsUrl)) as { default: VipsFactory };
       const vips = await mod.default({
         locateFile: (f: string) => `/vips/${f}`,
-        // HEIC/AVIF（libheif）と SVG（resvg）を有効化。jxl は CLI 非対応につき省く。
-        dynamicLibraries: ["vips-heif.wasm", "vips-resvg.wasm"],
+        // HEIC/AVIF（libheif）・SVG（resvg）・JXL を有効化。動的モジュールなので
+        // 使うときだけ読まれる＝ scan 経路は重くならない。
+        // （JXL は convert の入出力で使う。CLI 側は Windows 版が libjxl 非同梱なので web のみ・SPEC §5.4。）
+        dynamicLibraries: ["vips-heif.wasm", "vips-resvg.wasm", "vips-jxl.wasm"],
       });
       vips.concurrency(1); // シングルスレッド vips × N ワーカー（DESIGN §4）。
       return vips;
@@ -115,6 +142,116 @@ export async function decodeCanonical(
     // コピーして返す（delete 後も安全・crypto.subtle など BufferSource を要求する API にも渡せる）。
     const rgba = new Uint8Array(casted.writeToMemory());
     return { rgba, width, height, thumb };
+  } finally {
+    for (const im of trash) im.delete(); // wasm-vips のメモリは手動解放（leak 防止）。
+  }
+}
+
+/** convert の 1 件の結果（SPEC §5.4）。`out` は非 SAB（Blob 化・transfer のため）。 */
+export type ConvertedImage = {
+  out: Uint8Array<ArrayBuffer>;
+  width: number;
+  height: number;
+  /** 実際に書き出した形式（正規化後） */
+  format: string;
+};
+
+/**
+ * `bg` を vips の `background` 配列へ解決する（SPEC §5.4）。
+ * バンド数に合わせるのは libvips の embed が画像と同じ本数を要求するため。
+ * `average` は**縮小後の画像**から取る（参照実装 apply_contain と同じ）。
+ */
+function backgroundFor(img: VipsImage, bg: string): { value: number[]; needsAlpha: boolean } {
+  if (bg === BG_TRANSPARENT) {
+    // 透過背景は alpha 付きでないと表現できないので、3band なら addalpha を要求する。
+    return { value: [0, 0, 0, 0], needsAlpha: img.bands < 4 };
+  }
+  if (bg === BG_AVERAGE) {
+    const trash: VipsImage[] = [];
+    try {
+      const rgb = [0, 1, 2].map((i) => {
+        const band = img.extractBand(Math.min(i, img.bands - 1));
+        trash.push(band);
+        return band.avg();
+      });
+      return { value: img.bands >= 4 ? [...rgb, 255] : rgb, needsAlpha: false };
+    } finally {
+      for (const im of trash) im.delete();
+    }
+  }
+  const rgb = parseHexRgb(bg) ?? [255, 255, 255];
+  return { value: img.bands >= 4 ? [...rgb, 255] : rgb, needsAlpha: false };
+}
+
+/**
+ * 1 枚を変換する（SPEC §5.4）。`decodeCanonical` とは別経路で、
+ * **`VipsImage` を保持したまま** resize / extractArea / embed を繋いでから符号化する
+ * （decodeCanonical は RGBA のコピーしか返さないので変換には使えない）。
+ *
+ * EXIF の向きは適用する（`autorot`）。参照実装 `image_transform` は扱っていないが、
+ * それだと iPhone の HEIC → PNG が倒れる。SPEC §5.4「EXIF の向き」を参照。
+ */
+export async function convertBuffer(
+  bytes: ArrayBuffer,
+  options: ConvertOptions,
+  srcFormat: string,
+): Promise<ConvertedImage> {
+  return applyConvert(await getVips(), bytes, options, srcFormat);
+}
+
+/**
+ * [`convertBuffer`] の本体。**vips 実体を引数で受ける**ので、ブラウザ向けの `getVips()`
+ * （`/vips/vips-es6.js` を URL で読む）に縛られず、node の vitest からも同じコードを試験できる。
+ */
+export function applyConvert(
+  vips: Vips,
+  bytes: ArrayBuffer,
+  options: ConvertOptions,
+  srcFormat: string,
+): ConvertedImage {
+  const trash: VipsImage[] = [];
+  /** 中間画像を捨て漏らさないための小道具（分岐が多いので都度 push する）。 */
+  const keep = <T extends VipsImage>(im: T): T => {
+    trash.push(im);
+    return im;
+  };
+  try {
+    const loaded = keep(vips.Image.newFromBuffer(new Uint8Array(bytes)));
+    let img = keep(loaded.autorot());
+
+    const plan = planGeometry({
+      srcW: img.width,
+      srcH: img.height,
+      width: options.width,
+      height: options.height,
+      fit: options.fit,
+      gravity: options.gravity,
+    });
+
+    if (plan.kind === "resize") {
+      img = keep(img.resize(plan.scale));
+    } else if (plan.kind === "fill") {
+      img = keep(img.resize(plan.hscale, { vscale: plan.vscale }));
+    } else if (plan.kind === "cover") {
+      const resized = keep(img.resize(plan.scale));
+      img = keep(
+        resized.extractArea(plan.crop.left, plan.crop.top, plan.crop.width, plan.crop.height),
+      );
+    } else if (plan.kind === "contain") {
+      const resized = plan.scale < 1 ? keep(img.resize(plan.scale)) : img;
+      const bg = backgroundFor(resized, options.background);
+      const canvas = bg.needsAlpha ? keep(resized.addalpha()) : resized;
+      img = keep(
+        canvas.embed(plan.embed.x, plan.embed.y, plan.embed.width, plan.embed.height, {
+          extend: "background",
+          background: bg.value,
+        }),
+      );
+    }
+
+    const format = normalizeOutFormat(options.format ?? srcFormat);
+    const out = new Uint8Array(img.writeToBuffer(suffixFor(format, options.quality)));
+    return { out, width: img.width, height: img.height, format };
   } finally {
     for (const im of trash) im.delete(); // wasm-vips のメモリは手動解放（leak 防止）。
   }

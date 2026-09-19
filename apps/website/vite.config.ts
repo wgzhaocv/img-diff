@@ -16,8 +16,9 @@ function copyWasmVips(): PluginOption {
   // wasm-vips の exports は "./package.json" を公開しないので main（lib 配下）から lib を得る。
   const libDir = dirname(require.resolve("wasm-vips"));
   const dstDir = fileURLToPath(new URL("./public/vips", import.meta.url));
-  // worker が実際に使う分だけ（dynamicLibraries は heif + resvg。jxl は CLI 非対応につき積まない）。
-  const files = ["vips-es6.js", "vips.wasm", "vips-heif.wasm", "vips-resvg.wasm"];
+  // worker が実際に使う分だけ（workers/vips.ts の dynamicLibraries と**必ず一致させる**。
+  // 片方だけ足すと実行時に 404 する）。jxl は convert（SPEC §5.4）の入出力で使う。
+  const files = ["vips-es6.js", "vips.wasm", "vips-heif.wasm", "vips-resvg.wasm", "vips-jxl.wasm"];
   return {
     name: "copy-wasm-vips",
     async buildStart() {

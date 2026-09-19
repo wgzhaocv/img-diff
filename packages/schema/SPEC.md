@@ -78,14 +78,14 @@ CLI は原生に、web は wasm にコンパイルして共有する。出力 JS
 
 ## 4. 出力（--json / レポート）
 
-最上位は `Report = ScanReport | CompareResult | CleanReport | FindReport | RenderReport`、
-`kind`（"scan" / "compare" / "clean" / "find" / "render"）で判別。
+最上位は `Report = ScanReport | CompareResult | CleanReport | FindReport | RenderReport | ConvertReport`、
+`kind`（"scan" / "compare" / "clean" / "find" / "render" / "convert"）で判別。
 全出力に `producer { app, appVersion, vips, hashAlgo }` を付与。
 
 - `ScanReport`: `images[]` + `groups[]` + `skippedFiles[]` + `stats`。
   **決定性のため `images[]` と `skippedFiles[]` は path 昇順**（`groups[]` は §5 の通り最小メンバ path 昇順）。
 - `CompareResult`: `a` / `b` の `ImageRecord` + 各種スコア + 任意の `diffImage`（§3）。比較不能時は §3 の通り null。
-- `CleanReport`: §5.1。`FindReport`: §5.2。`RenderReport`: §5.3。
+- `CleanReport`: §5.1。`FindReport`: §5.2。`RenderReport`: §5.3。`ConvertReport`: §5.4。
 
 `ImageRecord.path` は scan ではルートからの相対パス（`/` 区切り）、compare では入力で与えたパス。
 `AssetRef` は `{kind:"path"}` か `{kind:"dataUri"}`（CLI はパス、web は data URI）。
@@ -150,6 +150,101 @@ libvips が §1 手順 1〜3 と同じ経路で描画し、透明（straight alp
 - 出力は `RenderReport`（`kind:"render"`）: `scale` + `items[].{src, dst, width, height, bytes, status, error?}` + `stats{scanned, rendered, skipped, failed, elapsedMs}`。
   `status` は `rendered` / `skipped` / `failed`。1 件の失敗で全体は止めず per-file に記録。`items` は `src` 昇順（決定性・§4）。
 - **注意**: 重複検出/比較目的なら render は不要（scan/compare/find は `.svg` を直接扱える）。render は PNG そのものが欲しいとき用。
+
+## 5.4 convert（寸法・形式の変換）
+
+画像の寸法と形式を変える補助ツール（`render` と同じく **imgdiff の本分＝重複検出とは別カテゴリ・
+非破壊**）。引数の意味と効き方は既存の変換サーバ `image_transform` に合わせてある
+（同じ引数で同じ結果になることを実測で確かめた）。
+
+**実装状況**: web（`/convert`）のみ。**CLI の `imgdiff convert` は未実装**。
+この節は両者が共有する正本なので、CLI を書くときはここだけを見れば足りるように算術まで書き下す。
+
+### 引数
+
+| 引数 | 型      | 既定             | 取り得る値                                                                                             |
+| ---- | ------- | ---------------- | ------------------------------------------------------------------------------------------------------ |
+| `w`  | `u32?`  | なし             | 目標幅                                                                                                 |
+| `h`  | `u32?`  | なし             | 目標高                                                                                                 |
+| `f`  | enum    | `cover`          | `cover` / `contain` / `fill`                                                                           |
+| `g`  | enum    | `center`         | `center` / `north` / `south` / `east` / `west` / `northeast` / `northwest` / `southeast` / `southwest` |
+| `bg` | 文字列  | 形式依存（下記） | `transparent` / `average` / 6 桁 hex                                                                   |
+| `fm` | 文字列? | 入力と同じ形式   | 出力形式（別名を正規化）                                                                               |
+| `q`  | `i32`   | `80`             | `clamp(1, 100)`。範囲外はエラーにせず丸める                                                            |
+
+### 規則（この 4 つが挙動の核）
+
+1. **拡大しない。** `scale = min(target / original, 1.0)`。`scale == 1.0` なら**元画像をそのまま返す**。
+2. **`w` と `h` の両方が在るときだけ `f` が効く。** 片方だけなら常に等比縮小で、`f` も `g` も無視する。
+3. **`bg` の既定は出力形式で変わる。** `png` / `webp` / `tiff` → `transparent`、それ以外 → `ffffff`。
+4. **no-op 検出。** 変換引数が 1 つも無い、または結果が元と同じなら元画像をそのまま返す。
+
+### 算術
+
+`(W, H)` を入力寸法、`(tw, th)` を目標寸法とする。
+
+- **片側のみ指定**: `scale = min(t / d, 1.0)`（`t` は与えられた方、`d` は対応する元の辺）。
+  出力は `(round(W·scale), round(H·scale))`。
+- **`fill`**: `hscale = min(tw/W, 1.0)`、`vscale = min(th/H, 1.0)` で非等比に縮小。出力は `(tw, th)` 相当。
+- **`cover`**: `scale = min(max(tw/W, th/H), 1.0)` で縮小 → 中間寸法 `(W', H')` から `(tw, th)` を切り出す。
+  切り出し位置は gravity で決まる（`dx = W' − tw`、`dy = H' − th`、負にはならない）:
+
+  | gravity     | left          | top           |
+  | ----------- | ------------- | ------------- |
+  | `center`    | `floor(dx/2)` | `floor(dy/2)` |
+  | `north`     | `floor(dx/2)` | `0`           |
+  | `south`     | `floor(dx/2)` | `dy`          |
+  | `west`      | `0`           | `floor(dy/2)` |
+  | `east`      | `dx`          | `floor(dy/2)` |
+  | `northwest` | `0`           | `0`           |
+  | `northeast` | `dx`          | `0`           |
+  | `southwest` | `0`           | `dy`          |
+  | `southeast` | `dx`          | `dy`          |
+
+- **`contain`**: `scale = min(min(tw/W, th/H), 1.0)` で縮小 → `(tw, th)` の画布へ `bg` で埋めて配置する。
+  配置位置は上表と同じ式で、`dx = tw − W'`、`dy = th − H'`（余白の分配なので符号が逆になるだけ）。
+
+### 形式
+
+`fm` の別名は `jpeg → jpg` / `tif → tiff` / `heif → heic` に正規化する
+（**注意: web 内部の `ImageRecord.format` は逆向きに `jpg → jpeg` へ正規化している。用途が違うので
+別の関数であり、片方に寄せてはいけない**）。
+
+| 形式                                | 読み | 書き                  | 備考                                                       |
+| ----------------------------------- | ---- | --------------------- | ---------------------------------------------------------- |
+| jpg / png / webp / gif / tiff / ppm | ○    | ○                     |                                                            |
+| avif                                | ○    | ○                     | libvips の `heifsave` の AV1 経路                          |
+| **jxl**                             | ○    | **web のみ ○**        | CLI は Windows 版が libjxl 非同梱のため出せない            |
+| **heic**                            | ○    | **×（両方やらない）** | 符号化器が GPL + 特許プールで配布条件が変わる。AVIF が代替 |
+| bmp                                 | ×    | ×                     | libvips に loader も saver も無い                          |
+
+品質指定 `q` は **jpg / png / webp / tiff / avif / jxl に付ける**。**gif と ppm には付けない**
+（libvips がその保存器で `Q` を受け付けず失敗する）。
+
+### EXIF の向き（`image_transform` から意図的に外す点）
+
+**読み込み後に `autorot` を適用する。** 参照元の `image_transform` は EXIF の向きを一切扱わず、
+そのため「JPEG → JPEG は出力に向きタグが引き継がれて正しく見えるが、JPEG → PNG では倒れる」という
+潜在バグを持つ。imgdiff は §1 の解読（scan / compare）でも `autorot` しているので、convert も揃える。
+
+### 出力先と既存の扱い
+
+`render`（§5.3）と同じ**非破壊**の規則:
+
+- 出力先は**入力とは別に指定する**（入力ルートからの相対構造を保つ）。
+- **出力先が既にあれば skip。** 明示的に上書きを指定したときだけ上書きする。
+- **入力ファイルは決して変更しない。**
+
+web v1 は「別に選んだ出力フォルダ」と「zip ダウンロード」の 2 つを実装する
+（入力フォルダへの書き戻しは規則としてここに在るが、web v1 では実装しない）。
+
+### 出力レポート
+
+`ConvertReport`（`kind:"convert"`）: `options`（適用した 7 引数の解決後の値）
+
+- `items[].{src, dst, width, height, bytes, status, error?}` + `stats{scanned, converted, skipped, failed, elapsedMs}`。
+  `status` は `converted` / `skipped` / `failed`。**1 件の失敗で全体は止めず per-file に記録**。
+  `items` は `src` 昇順（決定性・§4）。
 
 ## 6. バージョニング / 再現性
 
