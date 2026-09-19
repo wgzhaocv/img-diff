@@ -18,6 +18,7 @@
     "vite-plus": "catalog:"
   },
   "overrides": {
+    "@voidzero-dev/vite-plus-core": "0.2.2",
     "vite": "catalog:",
     "vitest": "catalog:"
   },
