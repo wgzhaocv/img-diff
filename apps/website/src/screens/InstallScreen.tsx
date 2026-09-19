@@ -7,8 +7,8 @@ import { ScreenHeader } from "@/components/ScreenHeader";
 import { CopyBlock } from "@/components/CopyBlock";
 
 // インストーラ・リリースの実 URL。プレビルド配布は Windows と macOS(Apple Silicon)。Linux は未対応。
-const INSTALL_PS1_URL = "https://imgdiff.wgzhao.me/install.ps1";
-const INSTALL_SH_URL = "https://imgdiff.wgzhao.me/install.sh";
+const INSTALL_PS1_URL = "https://img-diff.static.tools.nextop.asia/install.ps1";
+const INSTALL_SH_URL = "https://img-diff.static.tools.nextop.asia/install.sh";
 const RELEASES_URL = "https://github.com/wgzhaocv/img-diff/releases/latest";
 // macOS 版は Windows 版より先行しているため pre-release（= `releases/latest` に出てこない）。
 // タグを直接指す。**Windows 版が揃って正式リリースへ昇格したら RELEASES_URL に統一する。**

@@ -117,8 +117,16 @@
   [[simplify-means-4-agent-review]]。※直近は Anthropic 側 session limit で一部しか回らず inline 代替した回あり。
   破壊的な実削除は特に念入りに（codex rescue も可能なら併用）。
 - **手順**: 実装 → レビュー反映 → `vp check`（型/lint/整形）→ `vp build` → 検証 → master 直接コミット
-  [[commit-directly-no-branch]] → （非破壊なら）`cd apps/website && wrangler deploy`（個人 CF・wgzhaocv@gmail.com・
-  imgdiff.wgzhao.me）。ビルドに mingw PATH 不要（wasm pkg は `apps/website/src/wasm` にコミット済）。
+  [[commit-directly-no-branch]] → `cd apps/website && polar static deploy ./dist --name img-diff`
+  → `polar static files img-diff` で全階層を確認。
+  ビルドに mingw PATH 不要（wasm pkg は `apps/website/src/wasm` にコミット済）。
+- **配信先は Polaris の静的サイト 1 本**（2026-09-19 に利用者が決定）:
+  `https://img-diff.static.tools.nextop.asia/`・visibility `public`・インストーラ（install.ps1 /
+  install.sh）もここから配る。`_headers` の COOP/COEP は Polaris でも効いている（実測済み）。
+  - **Cloudflare（imgdiff.wgzhao.me）へはもう出さない。** 落とすかどうかは後日判断（`apps/website/wrangler.jsonc`
+    は残してある）。
+  - 利用者は「安定したら visibility を `company` に戻す」意向。戻すと社外からの `curl | bash` は
+    切れるが、**それは許容すると利用者が明言**しているので追加作業は不要。
 - **このセッションの commit（新しい順）**: `580edec`(Slider) `e981c1a`(選択ボタン hover 修正＝secondary→primary +
   wasm init を `{module_or_path}` に＝deprecated 警告解消) `2cffc16`(todo) `0723630`(査重→日本語) `b5454f5`(react-router+
   zustand+react-compare-slider 採用・手書きルータ削除) `76b7120`(進捗表示/スライダ/`#`廃止/タブ状態保持の初版※後で b5454f5 が上書き)

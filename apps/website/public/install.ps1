@@ -1,7 +1,7 @@
 # imgdiff Windows インストーラ。
 # GitHub Releases の最新版から自己完結パッケージ(zip)を取得し、%LOCALAPPDATA%\imgdiff へ展開、
 # その bin をユーザ PATH に追加する。同梱 DLL 込みなので MSYS2 等の別途導入は不要。
-# 使い方:  irm https://imgdiff.wgzhao.me/install.ps1 | iex
+# 使い方:  irm https://img-diff.static.tools.nextop.asia/install.ps1 | iex
 # 再実行で最新版へ入れ替え(update 代わり)にもなる。Windows PowerShell 5.1+ 想定。
 
 $ErrorActionPreference = 'Stop'

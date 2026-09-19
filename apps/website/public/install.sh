@@ -2,7 +2,7 @@
 # imgdiff macOS インストーラ。GitHub Releases から自己完結パッケージ(zip)を取得し、
 # ~/.local/share/imgdiff へ展開、その bin をシェルの PATH に追加する。
 # 同梱 dylib 込みなので Homebrew で libvips を入れる必要はない。
-# 使い方:  curl -fsSL https://imgdiff.wgzhao.me/install.sh | bash
+# 使い方:  curl -fsSL https://img-diff.static.tools.nextop.asia/install.sh | bash
 # 再実行で最新版へ入れ替え(update 代わり)にもなる。
 #
 # 対応: Apple Silicon (arm64) / macOS 26 以降。
