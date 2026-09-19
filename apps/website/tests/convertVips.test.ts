@@ -182,6 +182,81 @@ describe("contain の背景", () => {
   });
 });
 
+describe("グレースケール（bands が 3/4 でない画像）", () => {
+  // libvips の embed は背景ベクタの本数が画像の bands と一致しないと例外を投げる。
+  // 1band / 2band を取りこぼすと、グレースケール PNG を入れた瞬間に落ちる。
+  let gray1: ArrayBuffer;
+  let gray2: ArrayBuffer;
+
+  beforeAll(() => {
+    const v = vips as unknown as {
+      Image: {
+        newFromMemory(
+          d: Uint8Array,
+          w: number,
+          h: number,
+          b: number,
+          f: string,
+        ): { writeToBuffer(s: string): Uint8Array; bandjoin(n: number): unknown; delete(): void };
+      };
+    };
+    const w = 100;
+    const h = 50;
+    const g = new Uint8Array(w * h).fill(120);
+    const im1 = v.Image.newFromMemory(g, w, h, 1, "uchar");
+    gray1 = im1.writeToBuffer(".png").slice().buffer as ArrayBuffer;
+    im1.delete();
+    const ga = new Uint8Array(w * h * 2);
+    for (let i = 0; i < w * h; i++) {
+      ga[i * 2] = 120;
+      ga[i * 2 + 1] = 255;
+    }
+    const im2 = v.Image.newFromMemory(ga, w, h, 2, "uchar");
+    gray2 = im2.writeToBuffer(".png").slice().buffer as ArrayBuffer;
+    im2.delete();
+  });
+
+  it("1band を contain + hex 背景で変換できる", () => {
+    const r = applyConvert(
+      vips,
+      gray1,
+      { ...defaults, width: 40, height: 40, fit: "contain", background: "ff0000" },
+      "png",
+    );
+    expect(inspect(r.out)).toMatchObject({ width: 40, height: 40 });
+  });
+
+  it("1band を contain + transparent で変換できる", () => {
+    const r = applyConvert(
+      vips,
+      gray1,
+      { ...defaults, width: 40, height: 40, fit: "contain", background: "transparent" },
+      "png",
+    );
+    expect(inspect(r.out)).toMatchObject({ width: 40, height: 40 });
+  });
+
+  it("1band を contain + average で変換できる", () => {
+    const r = applyConvert(
+      vips,
+      gray1,
+      { ...defaults, width: 40, height: 40, fit: "contain", background: "average" },
+      "png",
+    );
+    expect(inspect(r.out)).toMatchObject({ width: 40, height: 40 });
+  });
+
+  it("2band（グレー + アルファ）も変換できる", () => {
+    const r = applyConvert(
+      vips,
+      gray2,
+      { ...defaults, width: 40, height: 40, fit: "contain", background: "ff0000" },
+      "png",
+    );
+    expect(inspect(r.out)).toMatchObject({ width: 40, height: 40 });
+  });
+});
+
 describe("gravity", () => {
   // 100x50 を 40x30 に cover → 中間 60x30 から横に 20px 余る。
   // 左半分が (200,100,50)・右半分が (10,20,30) なので、west は明るく east は暗い。

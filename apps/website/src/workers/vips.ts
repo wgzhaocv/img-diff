@@ -6,10 +6,11 @@ import type { ConvertOptions } from "schema";
 import {
   BG_AVERAGE,
   BG_TRANSPARENT,
+  backgroundVector,
   normalizeOutFormat,
   parseHexRgb,
   planGeometry,
-  suffixFor,
+  saveSpec,
 } from "@/lib/convertPlan";
 
 // --- wasm-vips の最小型（/vips/vips-es6.js を動的 import するため自前定義）。 ---
@@ -36,7 +37,8 @@ type VipsImage = {
   /** 全画素の平均値（1 バンドに対して呼ぶ）。 */
   avg(): number;
   writeToMemory(): Uint8Array;
-  writeToBuffer(suffix: string): Uint8Array;
+  /** オプションは**必ずこの第 2 引数で**渡す（接尾辞の文字列に下線キーを書くと黙って無視される）。 */
+  writeToBuffer(suffix: string, options?: Record<string, unknown>): Uint8Array;
   readonly width: number;
   readonly height: number;
   readonly bands: number;
@@ -162,25 +164,33 @@ export type ConvertedImage = {
  * `average` は**縮小後の画像**から取る（参照実装 apply_contain と同じ）。
  */
 function backgroundFor(img: VipsImage, bg: string): { value: number[]; needsAlpha: boolean } {
-  if (bg === BG_TRANSPARENT) {
-    // 透過背景は alpha 付きでないと表現できないので、3band なら addalpha を要求する。
-    return { value: [0, 0, 0, 0], needsAlpha: img.bands < 4 };
-  }
+  // 透過背景は alpha 付きでないと表現できないので、3band / 1band なら addalpha を要求する
+  // （参照実装 apply_contain.rs と同じ条件）。
+  const needsAlpha = bg === BG_TRANSPARENT && (img.bands === 3 || img.bands === 1);
+  const bands = needsAlpha ? img.bands + 1 : img.bands;
+
   if (bg === BG_AVERAGE) {
     const trash: VipsImage[] = [];
     try {
-      const rgb = [0, 1, 2].map((i) => {
-        const band = img.extractBand(Math.min(i, img.bands - 1));
+      // 3band 以上は RGB 各band の平均、それ未満は画像全体の平均（参照実装と同じ非対称）。
+      const whole = img.avg();
+      const bandAvg = (i: number): number => {
+        if (img.bands < 3) return whole;
+        const band = img.extractBand(i);
         trash.push(band);
         return band.avg();
-      });
-      return { value: img.bands >= 4 ? [...rgb, 255] : rgb, needsAlpha: false };
+      };
+      return { value: backgroundVector("", bands, bandAvg), needsAlpha };
     } finally {
       for (const im of trash) im.delete();
     }
   }
-  const rgb = parseHexRgb(bg) ?? [255, 255, 255];
-  return { value: img.bands >= 4 ? [...rgb, 255] : rgb, needsAlpha: false };
+
+  const rgb = bg === BG_TRANSPARENT ? null : (parseHexRgb(bg) ?? [255, 255, 255]);
+  return {
+    value: backgroundVector(bg, bands, (i) => rgb?.[i] ?? 255),
+    needsAlpha,
+  };
 }
 
 /**
@@ -250,8 +260,11 @@ export function applyConvert(
     }
 
     const format = normalizeOutFormat(options.format ?? srcFormat);
-    const out = new Uint8Array(img.writeToBuffer(suffixFor(format, options.quality)));
-    return { out, width: img.width, height: img.height, format };
+    const spec = saveSpec(format, options.quality);
+    // TIFF だけ保存前に sRGB へ寄せる（参照実装 save_image.rs と同じ）。
+    const target = spec.needsSrgb ? keep(img.colourspace("srgb")) : img;
+    const out = new Uint8Array(target.writeToBuffer(spec.suffix, spec.options));
+    return { out, width: target.width, height: target.height, format };
   } finally {
     for (const im of trash) im.delete(); // wasm-vips のメモリは手動解放（leak 防止）。
   }

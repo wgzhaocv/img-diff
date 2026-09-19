@@ -9,8 +9,9 @@ import {
   isNoopRequest,
   normalizeOutFormat,
   parseHexRgb,
+  backgroundVector,
   planGeometry,
-  suffixFor,
+  saveSpec,
 } from "@/lib/convertPlan";
 
 const base = { srcW: 100, srcH: 50, fit: "cover", gravity: "center" } as const;
@@ -231,12 +232,48 @@ describe("形式名と品質", () => {
     expect(clampQuality(Number.NaN)).toBe(80);
   });
 
-  it("gif と ppm には Q を付けない（libvips が受け付けない）", () => {
-    expect(suffixFor("jpg", 80)).toBe(".jpg[Q=80]");
-    expect(suffixFor("jpeg", 80)).toBe(".jpg[Q=80]");
-    expect(suffixFor("avif", 200)).toBe(".avif[Q=100]");
-    expect(suffixFor("gif", 80)).toBe(".gif");
-    expect(suffixFor("ppm", 80)).toBe(".ppm");
+  it("Q を受け付けない形式には渡さない（渡すと libvips が失敗する）", () => {
+    expect(saveSpec("jpg", 80).options).toMatchObject({ Q: 80 });
+    expect(saveSpec("jpeg", 80).suffix).toBe(".jpg");
+    expect(saveSpec("avif", 200).options).toMatchObject({ Q: 100, compression: "av1" });
+    expect(saveSpec("gif", 80).options).not.toHaveProperty("Q");
+    expect(saveSpec("png", 80).options).not.toHaveProperty("Q");
+    expect(saveSpec("ppm", 80).options).toEqual({});
+  });
+
+  it("TIFF だけ保存前に sRGB へ寄せる", () => {
+    expect(saveSpec("tiff", 80).needsSrgb).toBe(true);
+    for (const f of ["jpg", "png", "webp", "gif", "avif", "jxl"])
+      expect(saveSpec(f, 80).needsSrgb, f).toBe(false);
+  });
+
+  it("JPEG の色度間引きを止める設定を落とさない", () => {
+    // subsample_mode を落とすと見て分かる画質差が出る（参照実装が明示している）。
+    expect(saveSpec("jpg", 80).options).toMatchObject({
+      optimize_coding: true,
+      subsample_mode: "off",
+    });
+  });
+});
+
+describe("背景ベクタのバンド数合わせ", () => {
+  // libvips の embed は画像と同じ本数を要求し、足りないと例外を投げる。
+  // グレースケール(1band) / グレー+アルファ(2band) を落とすと、その画像で必ず落ちる。
+  const red = (i: number) => [255, 0, 0][i]!;
+
+  it("hex 背景は bands ごとに本数を合わせる", () => {
+    expect(backgroundVector("ff0000", 4, red)).toEqual([255, 0, 0, 255]);
+    expect(backgroundVector("ff0000", 3, red)).toEqual([255, 0, 0]);
+    // グレーは Rec.601 で畳む（参照実装と同じ係数）。
+    expect(backgroundVector("ff0000", 2, red)).toEqual([255 * 0.299, 255]);
+    expect(backgroundVector("ff0000", 1, red)).toEqual([255 * 0.299]);
+  });
+
+  it("transparent も bands ごとに変わる（alpha を足せない形は白へ退避）", () => {
+    expect(backgroundVector("transparent", 4, red)).toEqual([0, 0, 0, 0]);
+    expect(backgroundVector("transparent", 2, red)).toEqual([255, 0]);
+    expect(backgroundVector("transparent", 1, red)).toEqual([255]);
+    expect(backgroundVector("transparent", 3, red)).toEqual([255, 255, 255]);
   });
 });
 

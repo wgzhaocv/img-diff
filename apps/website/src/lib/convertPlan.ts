@@ -197,11 +197,88 @@ export function isNoopRequest(o: ConvertOptions, srcFormat: string): boolean {
   return !formatChanges && !resizes;
 }
 
-/** `q` を受け付けない保存器（実測: libvips が例外を投げる）。 */
-const NO_QUALITY_FORMATS = new Set(["gif", "ppm"]);
+/** `writeToBuffer` へ渡す保存指定。 */
+export type SaveSpec = {
+  suffix: string;
+  /**
+   * 保存器のオプション。**接尾辞の文字列に混ぜてはいけない** —— 文字列形式はキーを連字符で書く
+   * 必要があり、下線で書くと**例外も警告も出さずに黙って無視される**（実測）。
+   * オブジェクト形式は wasm-vips の型定義どおり下線で、TS が綴りを検査してくれる。
+   */
+  options: Record<string, unknown>;
+  /** TIFF だけ保存前に sRGB へ変換する（参照実装 save_image.rs と同じ）。 */
+  needsSrgb: boolean;
+};
 
-/** libvips の `writeToBuffer` に渡す接尾辞。形式が品質を受け付けないときは付けない。 */
-export function suffixFor(outFormat: string, quality: number): string {
+/**
+ * 形式ごとの保存指定（参照実装 `save_image.rs` と同じ設定）。
+ * png / gif / ppm は品質を受け付けないので `Q` を渡さない（渡すと libvips が失敗する）。
+ */
+export function saveSpec(outFormat: string, quality: number): SaveSpec {
   const f = normalizeOutFormat(outFormat);
-  return NO_QUALITY_FORMATS.has(f) ? `.${f}` : `.${f}[Q=${clampQuality(quality)}]`;
+  const Q = clampQuality(quality);
+  switch (f) {
+    case "jpg":
+      // subsample_mode:"off" は色度間引きを止める＝見て分かる品質差になるので落とせない。
+      return {
+        suffix: ".jpg",
+        options: { Q, optimize_coding: true, subsample_mode: "off" },
+        needsSrgb: false,
+      };
+    case "png":
+      return {
+        suffix: ".png",
+        options: { compression: 6, filter: "none", effort: 4 },
+        needsSrgb: false,
+      };
+    case "webp":
+      return {
+        suffix: ".webp",
+        options: { Q, effort: 4, smart_subsample: true },
+        needsSrgb: false,
+      };
+    case "tiff":
+      return {
+        suffix: ".tiff",
+        options: { compression: "lzw", predictor: "horizontal" },
+        needsSrgb: true,
+      };
+    case "gif":
+      return {
+        suffix: ".gif",
+        options: { effort: 4, interpalette_maxerror: 3 },
+        needsSrgb: false,
+      };
+    case "avif":
+      return { suffix: ".avif", options: { Q, compression: "av1" }, needsSrgb: false };
+    default:
+      // jxl（web のみ）と ppm など。ppm は Q を受け付けないので付けない。
+      return { suffix: `.${f}`, options: f === "ppm" ? {} : { Q }, needsSrgb: false };
+  }
+}
+
+/**
+ * バンド数に合わせた背景ベクタを作る（SPEC §5.4）。
+ * **libvips の `embed` は画像と同じ本数（または 1 本）を要求し、足りないと例外を投げる**
+ * ので、グレースケール（1band）やグレー+アルファ（2band）も必ず扱うこと。
+ * 参照実装 `apply_contain.rs` の分岐と同じ。
+ */
+export function backgroundVector(
+  bg: string,
+  bands: number,
+  rgbOf: (i: number) => number,
+): number[] {
+  if (bg === BG_TRANSPARENT) {
+    // 3band/1band は呼び出し側が addalpha 済みの想定だが、そうでない形にも定義を与える。
+    if (bands === 4) return [0, 0, 0, 0];
+    if (bands === 2) return [255, 0];
+    if (bands === 1) return [255];
+    return [255, 255, 255]; // alpha を足せない形＝白へ退避（参照実装と同じ）
+  }
+  const [r, g, b] = [rgbOf(0), rgbOf(1), rgbOf(2)];
+  const gray = r * 0.299 + g * 0.587 + b * 0.114;
+  if (bands === 4) return [r, g, b, 255];
+  if (bands === 2) return [gray, 255];
+  if (bands === 1) return [gray];
+  return [r, g, b];
 }
