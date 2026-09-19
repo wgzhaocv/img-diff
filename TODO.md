@@ -40,15 +40,50 @@
     **不十分**（dlopen は PATH と無関係）。`DYLD_PRINT_LIBRARIES=1` で libvips の像が 1 つか数えること。
   - **繰延べ**: fontconfig の設定パス（`/opt/homebrew/etc/fonts`）は同梱していないので、
     `render` で**文字入り SVG** を描くとフォントが代替される。scan/compare/HEIC には影響なし。
-- **▶ 次にやる収尾（Windows 機で）**: `scripts/package-windows.sh` で 0.1.5 の Windows zip を作る →
-  `scripts/merge-manifest.sh` で 2 target の `manifest.json` を合成 → v0.1.5 の **pre-release を解除** →
-  `apps/website/public/install.sh` の `BASE` を `releases/latest/download` に戻し、
-  `InstallScreen.tsx` の `MACOS_RELEASE_URL` を `RELEASES_URL` に統一。
-  **それまで `releases/latest` は v0.1.4 のまま**＝ Windows の導入と自己更新は無傷。
+- **リリース済み**: [v0.1.5](https://github.com/wgzhaocv/img-diff/releases/tag/v0.1.5) を **pre-release** で公開
+  （資産 = mac zip + `manifest.json` + `manifest-aarch64-apple-darwin.json`）。web も本番反映済み
+  （version `d6d87e71`）。**`releases/latest` は v0.1.4 のまま**＝ Windows の導入と自己更新は無傷
+  （API で確認済み）。実機で `curl | bash` → scan（HEIC/AVIF/JXL）→ `update`（「すでに最新です」）→
+  再実行の冪等まで通した。
+
+- **▶ 次にやる収尾（Windows 機で。この順に）**:
+  1. `bash scripts/package-windows.sh` → `target/win-package/` に zip と `manifest-x86_64-pc-windows-gnu.json`
+  2. mac 側の断片を v0.1.5 のリリース資産から取る
+     （`gh release download v0.1.5 -p 'manifest-aarch64-apple-darwin.json'`。
+     ローカルの `target/macos-package/` は `cargo clean` で消えるので**リリースから取る**）
+  3. `bash scripts/merge-manifest.sh manifest.json manifest-*.json` → 2 target 入りの `manifest.json`
+  4. `gh release upload v0.1.5 --clobber <win zip> manifest.json manifest-x86_64-pc-windows-gnu.json`
+  5. `gh release edit v0.1.5 --prerelease=false` で **latest に昇格**
+  6. `apps/website/public/install.sh` の `BASE` を `https://github.com/$REPO/releases/latest/download` に戻して
+     `TAG` を消す。`InstallScreen.tsx` の `MACOS_RELEASE_URL` を `RELEASES_URL` に統一。deploy。
+     （`package-macos.sh` の tag 固定チェックは「tag を書いていなければ素通し」なので、
+     この片付けをしても検査は壊れない。）
 - **Linux パッケージ 未着手**。install ページは `cargo install` 案内のまま。
 - **CI 化（未着手・macOS の被覆を広げるため）**: この repo にはまだ workflow が 1 つも無い。
   `macos-15` runner で焼けば macOS 15+ を、`macos-13` なら Intel 版も賄える。
   `scripts/package-macos.sh` はそのまま載る（brew install vips libheif dylibbundler を足すだけ）。
+
+#### 配布まわりで「やった方が良いが今回は見送った」もの
+
+レビュー（simplify 4 エージェント + codex gpt-5.6-sol）で挙がって、代価が今回の範囲を超えるので
+繰延べた設計変更。**やるなら上の Windows 収尾より後**（今の仕組みは Windows 側が現に依存している）。
+
+- **(a) 束の身元を標記ファイルで持つ。** 今は「exe の親が `bin`」という**形**で同梱パッケージか判定して
+  いる（`util::bundle_root`）。`cargo install --root ~/.local` でも成立してしまうので、`decode` は
+  「モジュールディレクトリが実在するか」、`update` は「bin レイアウトか」と**呼び出し側が別々に**
+  条件を足している。打包時に `lib/imgdiff-bundle.json`（version / target / modulesDir）を書いて
+  それを探す形にすると、判定が**推定から事実に**変わり、条件の重複も消える。
+- **(b) 資産名から版番号を落とす**（`imgdiff-<target>.zip`）。そうすると install 系は
+  `releases/latest/download/imgdiff-<target>.zip` を直に取れて、**manifest も断片も合成も要らなくなる**
+  ＝ プラットフォームごとに完全に独立して発版できる。今の「1 つの release に完全な manifest が
+  ちょうど 1 つ」という前提は、単プラットフォームの hotfix を出すたびに手作業の合成を要求する。
+  **移行時の注意**: 既存の v0.1.4 の資産は版番号入りなので、切り替えは新しい資産が両 target
+  揃ってからでないと Windows の導入が 404 になる。
+- **(c) `version_check` と `update` の GitHub クライアントが二重**（`REPO` 定数・ureq Agent・
+  ヘッダ・`releases/latest` の URL・`Release{tag_name}` の deser が両方に在る）。片方に寄せる。
+  タイムアウトだけは意図的に違う（1.5s の静かな探査 / 180s のダウンロード）ので引数に残すこと。
+- **(d) 小物**: `version_check::state_path` が `index::default_cache_dir()` を使っていない
+  （キャッシュ場所の定義が 2 箇所）／`now_epoch` が `util::now_rfc3339` の中身と重複。
 
 ### 2. web（Phase 0〜3b サムネまで完了・commit 済。scan は実用レベルで動作）
 

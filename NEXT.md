@@ -311,9 +311,9 @@ HEVC 入りの配布を始めた / ライセンス条件が変わった）、**�
 - 検証は `vp check` と `vp test`。Rust を触ったら `cargo test`（wasm は
   `wasm-pack test --node crates/wasm`・要 mingw on PATH）。
 
-## 4. 未確認（次のセッションが最初に潰すと良い）
+## 4. 未確認 → **解消（2026-09-19）**
 
-- **repo の最終 commit は `4727905`（2026-07-06）だが、ポラリスに上がっている
-  `img-diff` の配信物は 2026-09-18 に上げられたもの。** 同じ版かどうか照合していない。
-  web を触る前に、**今の master を build した出力が本番と一致するか**を確かめること
-  （食い違うなら、本番にだけ在る変更を先に回収する）。
+「master と本番が同じ版か」は確認できた。master から build し直して `wrangler deploy` したとき、
+**13 資産のうち 10 個が「already uploaded」= 既に本番に在る物とバイト同一**で、上がったのは
+今回足した `install.sh` と、それに伴って変わった JS バンドル・`index.html` だけだった。
+つまり本番にだけ在る変更は無かった。現在の本番は master の commit `efdd55f` 相当（version `d6d87e71`）。
