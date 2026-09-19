@@ -1,8 +1,9 @@
 /// <reference lib="webworker" />
 import init, { flatten_and_dhash, flatten_on_white } from "@/wasm/imgdiff_wasm";
 import wasmUrl from "@/wasm/imgdiff_wasm_bg.wasm?url";
-import { decodeCanonical } from "./vips";
+import { convertBuffer, decodeCanonical } from "./vips";
 import type {
+  ConvertResult,
   DecodeResult,
   HashResult,
   PixelResult,
@@ -126,7 +127,33 @@ async function decodeOne(req: WorkerRequest): Promise<DecodeResult> {
   };
 }
 
-/// 非 SAB な独立バッファ（rgba / thumb）は transfer してコピーを避ける。
+/// 1 枚を変換する（SPEC §5.4）。デコード経路（decodeFull）とは独立で、
+/// vips のハンドルを保ったまま resize/embed して符号化する。
+async function convertOne(req: Extract<WorkerRequest, { op: "convert" }>): Promise<ConvertResult> {
+  try {
+    const r = await convertBuffer(req.bytes, req.options, req.srcFormat);
+    return {
+      op: "convert",
+      path: req.path,
+      out: r.out,
+      format: r.format,
+      width: r.width,
+      height: r.height,
+    };
+  } catch (e) {
+    // 1 件の失敗で全体を止めない（SPEC §5.4）。他の op と同じくエラーは戻り値で返す。
+    return {
+      op: "convert",
+      path: req.path,
+      format: "",
+      width: 0,
+      height: 0,
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
+}
+
+/// 非 SAB な独立バッファ（rgba / thumb / out）は transfer してコピーを避ける。
 function transfersOf(res: WorkerResponse): Transferable[] {
   const t: Transferable[] = [];
   if (res.op === "hash" && res.thumb) t.push(res.thumb.buffer);
@@ -134,16 +161,31 @@ function transfersOf(res: WorkerResponse): Transferable[] {
     if (res.rgba) t.push(res.rgba.buffer);
     if (res.thumb) t.push(res.thumb.buffer);
   }
+  if (res.op === "convert" && res.out) t.push(res.out.buffer);
   return t;
 }
 
 self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
   const req = ev.data;
+  // 未知の op を黙って hash として扱わない（増やしたのに配線し忘れたことに気づけるように）。
   const res =
-    req.op === "pixel"
-      ? await pixelOne(req)
-      : req.op === "decode"
-        ? await decodeOne(req)
-        : await hashOne(req);
+    req.op === "convert"
+      ? await convertOne(req)
+      : req.op === "pixel"
+        ? await pixelOne(req)
+        : req.op === "decode"
+          ? await decodeOne(req)
+          : req.op === "hash"
+            ? await hashOne(req)
+            : ({
+                op: "hash",
+                path: (req as { path: string }).path,
+                sha256: "",
+                phash: null,
+                width: 0,
+                height: 0,
+                bytes: 0,
+                error: `未知の op: ${String((req as { op: string }).op)}`,
+              } satisfies HashResult);
   self.postMessage(res, transfersOf(res));
 };

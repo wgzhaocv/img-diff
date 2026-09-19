@@ -1,15 +1,14 @@
 import { create } from "zustand";
 import { toast } from "sonner";
 import { compareFiles, type CompareOutcome, type ComparePhase } from "@/lib/compare";
-import { HashPool } from "@/lib/workerPool";
+import { poolRef } from "@/lib/workerPool";
 
 // compare 画面の状態ストア（zustand）。コンポーネント外に持つのでルート切替でアンマウントされても
 // 選択ファイル・比較結果が保持される。ワーカープールもここで使い回す（暖まったまま＝再比較が速い）。
 
 // compare は 2 枚だけなのでプールは 2 本で十分（scan の大規模プールとは別インスタンス）。
 const POOL_SIZE = 2;
-let pool: HashPool | null = null;
-const getPool = (): HashPool => (pool ??= new HashPool(POOL_SIZE));
+const pool = poolRef(POOL_SIZE); // 破棄後も作り直せる持ち手（workerPool.ts）。
 let running = false; // 二重起動防止（描画に無関係なのでストア外に置く）。
 
 type Status = "idle" | "comparing" | "done";
@@ -30,7 +29,7 @@ export const useCompareStore = create<CompareState>((set, get) => {
     running = true;
     set({ status: "comparing", phase: "decode", outcome: null });
     try {
-      const outcome = await compareFiles(a, b, getPool(), (phase) => set({ phase }));
+      const outcome = await compareFiles(a, b, pool.get(), (phase) => set({ phase }));
       set({ outcome, status: "done" });
     } catch (e) {
       toast.error("比較に失敗しました", {

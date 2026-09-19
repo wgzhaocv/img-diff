@@ -47,10 +47,7 @@ export async function requestReadPermission(handle: FileSystemDirectoryHandle): 
 /// fail-closed に相当）。呼び出し側が readwrite 権限を取得済みである前提。
 export async function removeByPath(root: FileSystemDirectoryHandle, path: string): Promise<void> {
   // split は必ず 1 要素以上を返すので、空パスは空セグメント（""）として下の検査で弾かれる。
-  const segments = path.split("/");
-  if (segments.some((s) => s === "" || s === "." || s === "..")) {
-    throw new Error(`削除対象のパスが不正です: ${path}`);
-  }
+  const segments = safeSegments(path, "削除対象");
   let dir = root;
   for (let i = 0; i < segments.length - 1; i++) {
     dir = await dir.getDirectoryHandle(segments[i]);
@@ -58,11 +55,24 @@ export async function removeByPath(root: FileSystemDirectoryHandle, path: string
   await dir.removeEntry(segments[segments.length - 1]);
 }
 
-/// フォルダを選ばせて永続ハンドルを得る（**ユーザー操作内**で呼ぶ）。スキャンは read のみ。
-export async function pickDirectory(): Promise<FileSystemDirectoryHandle | null> {
+/// root 相対パス（'/' 区切り）のセグメント列を検証して返す。
+/// 空・'.'・'..' は fail-closed で throw（removeByPath と同じ防御。書き出しにも同じ検査が要る）。
+function safeSegments(path: string, what: string): string[] {
+  const segments = path.split("/");
+  if (segments.some((s) => s === "" || s === "." || s === "..")) {
+    throw new Error(`${what}のパスが不正です: ${path}`);
+  }
+  return segments;
+}
+
+/// フォルダを選ばせて永続ハンドルを得る（**ユーザー操作内**で呼ぶ）。
+/// スキャンは read のみ。convert の出力先だけ readwrite で開く（入力フォルダには一切書かない）。
+export async function pickDirectory(
+  mode: "read" | "readwrite" = "read",
+): Promise<FileSystemDirectoryHandle | null> {
   if (!window.showDirectoryPicker) return null;
   try {
-    return await window.showDirectoryPicker({ mode: "read" });
+    return await window.showDirectoryPicker({ mode });
   } catch (e) {
     // ユーザーがキャンセル（AbortError）した等は null。
     if (e instanceof DOMException && e.name === "AbortError") return null;
@@ -112,4 +122,44 @@ export async function walkImages(
   }
   await recurse(dir, "");
   return out;
+}
+
+/// 出力先に 1 ファイル書く（convert・SPEC §5.4 の非破壊規則）。
+/// - 途中のディレクトリは作る（入力ルートからの相対構造を保つため）。
+/// - **既に在れば書かずに `"skipped"`。`overwrite` を明示したときだけ上書きする。**
+/// - パスは removeByPath と同じ fail-closed 検査を通す。
+/// 呼び出し側が readwrite 権限を取得済みである前提。
+export async function writeFileAt(
+  root: FileSystemDirectoryHandle,
+  path: string,
+  data: Uint8Array<ArrayBuffer>,
+  overwrite: boolean,
+): Promise<"written" | "skipped"> {
+  const segments = safeSegments(path, "書き出し先");
+  let dir = root;
+  for (let i = 0; i < segments.length - 1; i++) {
+    dir = await dir.getDirectoryHandle(segments[i], { create: true });
+  }
+  const name = segments[segments.length - 1];
+  if (!overwrite && (await exists(dir, name))) return "skipped";
+  const handle = await dir.getFileHandle(name, { create: true });
+  const w = await handle.createWritable();
+  try {
+    await w.write(data);
+  } finally {
+    await w.close();
+  }
+  return "written";
+}
+
+/// そのディレクトリに同名のファイルが在るか。NotFoundError 以外は呼び出し側へ投げる
+/// （権限切れ等を「無い」と誤認して上書きしないため）。
+async function exists(dir: FileSystemDirectoryHandle, name: string): Promise<boolean> {
+  try {
+    await dir.getFileHandle(name);
+    return true;
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "NotFoundError") return false;
+    throw e;
+  }
 }

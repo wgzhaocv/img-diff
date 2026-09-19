@@ -79,9 +79,10 @@ export class HashPool {
   }
 
   /// 破棄。走行中・待機中の Promise はすべて reject する（宙ぶらりを残さない）。
-  terminate(): void {
+  /// **破棄したプールは再利用できない** — 作り直しは [`poolRef`] が面倒を見る。
+  terminate(reason = "処理が中断されました"): void {
     this.disposed = true;
-    const aborted = new Error("スキャンが中断されました");
+    const aborted = new Error(reason);
     for (const task of this.queue) task.reject(aborted);
     this.queue.length = 0;
     for (const p of this.pending.values()) p.reject(aborted);
@@ -90,6 +91,27 @@ export class HashPool {
     this.workers.length = 0;
     this.idle.length = 0;
   }
+}
+
+/**
+ * 作り直せるプールの持ち手。
+ *
+ * ストアが `let pool: HashPool | null` + `pool ??= new HashPool(n)` を各自持つと、
+ * **`terminate()` した後もその破棄済みインスタンスを掴み続け**、以後の `submit` が全部 reject される
+ * （中断ボタンを付けるまで誰も `terminate()` を呼んでいなかったので表に出ていなかった）。
+ * 生成と破棄をここ 1 箇所に閉じ込めて、`reset()` の次の `get()` が必ず新しいプールを返すようにする。
+ *
+ * 機能ごとに別の持ち手を持つこと（共有すると、convert の中断が走行中の scan まで巻き込む）。
+ */
+export function poolRef(size: number): { get: () => HashPool; reset: (reason?: string) => void } {
+  let pool: HashPool | null = null;
+  return {
+    get: () => (pool ??= new HashPool(size)),
+    reset: (reason?: string) => {
+      pool?.terminate(reason);
+      pool = null;
+    },
+  };
 }
 
 /// 既定のプール本数（DESIGN §4: min(hardwareConcurrency, 8)）。

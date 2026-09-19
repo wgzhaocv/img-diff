@@ -5,14 +5,13 @@ import { clusterGroup, type DupGroup, type Strictness } from "@/lib/core";
 import { applyDeletions, planDeletions, type CleanResult } from "@/lib/clean";
 import { requestWritePermission } from "@/lib/fsaccess";
 import { formatBytes } from "@/lib/format";
-import { defaultPoolSize, HashPool } from "@/lib/workerPool";
+import { defaultPoolSize, poolRef } from "@/lib/workerPool";
 
 // scan 画面の状態ストア（zustand）。コンポーネント外に持つのでルート切替でアンマウントされても
 // スキャン結果・厳密度・グループ・進捗が保持される。ワーカープールもここで使い回す。
 
 const POOL_SIZE = defaultPoolSize();
-let pool: HashPool | null = null;
-const getPool = (): HashPool => (pool ??= new HashPool(POOL_SIZE));
+const pool = poolRef(POOL_SIZE); // 破棄後も作り直せる持ち手（workerPool.ts）。
 let running = false; // スキャンの二重起動防止。
 let deleting = false; // 実削除の二重起動防止。
 let clusterToken = 0; // クラスタリングの競合（古い結果の上書き）を防ぐ単調トークン。
@@ -180,11 +179,11 @@ export const useScanStore = create<ScanState>((set, get) => {
     },
     runFiles: (files) => {
       set({ rootHandle: null }); // File[] 経路は永続ハンドルが無く削除不可。
-      return runIndex(() => runScan(files, getPool(), POOL_SIZE, onProgress));
+      return runIndex(() => runScan(files, pool.get(), POOL_SIZE, onProgress));
     },
     runFolder: (handle) => {
       set({ rootHandle: handle }); // 削除に使う root ハンドルを保持。
-      return runIndex(() => scanFolder(handle, getPool(), POOL_SIZE, onProgress));
+      return runIndex(() => scanFolder(handle, pool.get(), POOL_SIZE, onProgress));
     },
     deleteDuplicates,
   };

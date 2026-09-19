@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",
+    "client-zip": "^2.5.1",
     "clsx": "^2.1.1",
     "idb": "^8.0.3",
     "lucide-react": "^1.22.0",

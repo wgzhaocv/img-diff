@@ -1,10 +1,16 @@
+import type { ConvertOptions } from "schema";
+
 // ワーカー ⇄ メイン のメッセージ契約（DESIGN §4・web 内部プロトコル。索引レコードの型 ImageRecord は
 // 共有契約 `schema` 側が正本なのでそちらを import する）。
 // op="hash": 1 パス目（sha256 + dHash）。op="pixel": 2 パス目（pixelSha256・dHash 衝突バケットのみ）。
 // op="decode": compare（2 枚比較）用。sha256 + dHash に加え、白平坦化後の全分解能 RGBA を返す
 //   （呼び出し側が compare_scores / diff_highlight に使う）。scan の hash/pixel とは別経路。
 
-export type WorkerRequest = { op: "hash" | "pixel" | "decode"; path: string; bytes: ArrayBuffer };
+// op="convert": 寸法・形式の変換（SPEC §5.4）。scan/compare とは別経路で、
+//   デコード結果ではなく**符号化済みのバイト列**を返す。
+export type WorkerRequest =
+  | { op: "hash" | "pixel" | "decode"; path: string; bytes: ArrayBuffer }
+  | { op: "convert"; path: string; bytes: ArrayBuffer; options: ConvertOptions; srcFormat: string };
 
 export type HashResult = {
   op: "hash";
@@ -46,4 +52,16 @@ export type DecodeResult = {
   error?: string;
 };
 
-export type WorkerResponse = HashResult | PixelResult | DecodeResult;
+export type ConvertResult = {
+  op: "convert";
+  path: string;
+  /** 変換後のバイト列。失敗時は無し。非 SAB（Blob 化・transfer のため）。 */
+  out?: Uint8Array<ArrayBuffer>;
+  /** 実際に書き出した形式（正規化後）。失敗時は空文字。 */
+  format: string;
+  width: number;
+  height: number;
+  error?: string;
+};
+
+export type WorkerResponse = HashResult | PixelResult | DecodeResult | ConvertResult;

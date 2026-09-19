@@ -13,6 +13,7 @@ import {
   planGeometry,
   saveSpec,
 } from "@/lib/convertPlan";
+import { outPathFor } from "@/lib/convert";
 
 const base = { srcW: 100, srcH: 50, fit: "cover", gravity: "center" } as const;
 
@@ -288,5 +289,23 @@ describe("hex 背景", () => {
     expect(parseHexRgb("transparent")).toBeNull();
     expect(parseHexRgb("gggggg")).toBeNull();
     expect(parseHexRgb("")).toBeNull();
+  });
+});
+
+describe("出力ファイル名", () => {
+  it("拡張子を出力形式へ差し替える", () => {
+    expect(outPathFor("a/b/photo.jpg", "webp")).toBe("a/b/photo.webp");
+    expect(outPathFor("photo.JPEG", "jpeg")).toBe("photo.jpg");
+    expect(outPathFor("photo.heic", "avif")).toBe("photo.avif");
+  });
+
+  it("形式を変えないなら元の名前のまま", () => {
+    expect(outPathFor("a/b/photo.jpg", null)).toBe("a/b/photo.jpg");
+  });
+
+  it("拡張子が無い / ディレクトリ名にドットがある場合を壊さない", () => {
+    expect(outPathFor("a/b/noext", "png")).toBe("a/b/noext.png");
+    expect(outPathFor("a.dir/photo", "png")).toBe("a.dir/photo.png");
+    expect(outPathFor("a.dir/photo.jpg", "png")).toBe("a.dir/photo.png");
   });
 });
