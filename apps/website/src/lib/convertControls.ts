@@ -197,6 +197,12 @@ export function mimeOf(outFormat: string): string {
   return MIME[normalizeOutFormat(outFormat)] ?? "application/octet-stream";
 }
 
+/** MIME から拡張子へ（貼り付けた画像は名前に拡張子が無いことがある）。 */
+export function extFromMime(mime: string): string | null {
+  const m = mime.toLowerCase().split(";")[0].trim();
+  return Object.entries(MIME).find(([, v]) => v === m)?.[0] ?? null;
+}
+
 /**
  * **ブラウザが素で描ける形式か。** wasm-vips が書けても `<img>` に出せるとは限らない
  * （jxl / tiff / ppm は出せない）。出せないときはプレビューの絵を諦めて数値だけ見せる。

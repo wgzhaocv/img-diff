@@ -11,6 +11,14 @@ declare global {
     }) => Promise<FileSystemDirectoryHandle>;
     showSaveFilePicker?: (opts?: { suggestedName?: string }) => Promise<FileSystemFileHandle>;
   }
+  /**
+   * ドロップされた項目から handle を取る（Chromium 系のみ）。lib.dom の型に無い。
+   * **フォルダのドロップはこれでしか扱えない** —— `dataTransfer.files` はフォルダを
+   * 中身の無い項目として渡してくる。
+   */
+  interface DataTransferItem {
+    getAsFileSystemHandle?: () => Promise<FileSystemHandle | null>;
+  }
 }
 
 // requestPermission は lib.dom の型に無い（FS Access の権限 API）ので最小宣言。

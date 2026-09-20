@@ -10,10 +10,16 @@ type Props = {
   className?: string;
   /** ドロップされたファイル（任意。未指定ならドロップは視覚のみ）。 */
   onFiles?: (files: File[]) => void;
+  /**
+   * ドロップされた中身をそのまま渡す（任意。**指定すると `onFiles` より優先**）。
+   * フォルダのドロップを扱いたい側だけが使う —— `dataTransfer.files` はフォルダを
+   * 中身の無い項目として渡してくるので、`items` から handle を取る必要がある。
+   */
+  onDrop?: (data: DataTransfer) => void;
 };
 
 // ドロップ領域。ドラッグ時のハイライト + onFiles でドロップファイルを渡す。
-export function DropZone({ icon, title, hint, children, className, onFiles }: Props) {
+export function DropZone({ icon, title, hint, children, className, onFiles, onDrop }: Props) {
   const [over, setOver] = useState(false);
 
   return (
@@ -26,6 +32,10 @@ export function DropZone({ icon, title, hint, children, className, onFiles }: Pr
       onDrop={(e) => {
         e.preventDefault();
         setOver(false);
+        if (onDrop) {
+          onDrop(e.dataTransfer);
+          return;
+        }
         const files = Array.from(e.dataTransfer.files);
         if (files.length > 0) onFiles?.(files);
       }}
