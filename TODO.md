@@ -89,8 +89,9 @@
 
 **▶ 再開時の次アクション（新しい chat はまずここを読む）**
 
-- **現状（すべて本番デプロイ済・最新 version `894e5f89`＝install ページ込み・imgdiff.wgzhao.me 稼働）**:
-  - **scan**（フォルダ重複検索）+ **compare**（2枚比較）+ **install ページ**が動作。全経路で **web dHash==CLI**。
+- **現状（配信先は Polaris の静的サイト 1 本 = `https://img-diff.static.tools.nextop.asia/`・public）**:
+  - **scan**（フォルダ重複検索）+ **compare**（2枚比較）+ **convert**（形式変換・§2.5）+ **install ページ**が動作。
+    全経路で **web dHash==CLI**。
   - **前回フォルダ再スキャン**（idle に「前回のフォルダ」チップ→click 内 read 権限→キャッシュ突合で高速再スキャン）、
     **scan-time キャッシュ GC**（列挙に無くなった path の hashes/thumbs 掃除）、**pixelSha256 golden**（native==wasm）を追加（commit `af529e9`・下記 §3）。
   - compare = 並べて / 境界スライダ / 差分ハイライト(canvas) + SSIM/PSNR/差分割合/ハミング等幅表示 + 段階進捗（読込→計算→差分）。
@@ -185,6 +186,34 @@
   simplify=4エージェント + **codex review**（gpt-5.5）反映（`cargo install` 化・per-button aria-label・長コマンドの透け防止）。
   ※ **Mac/Linux バイナリは未リリース**。install の Windows one-liner は GitHub Releases に実体（`latest`）が要る（未作成なら失敗）→ §1 の release 作成が次。
 - 設計は `apps/website/DESIGN.md`、ロジック正本は `packages/schema/SPEC.md`。
+
+### 2.5 画像形式の変換（SPEC §5.4 / web `/convert`）— **完了**（2026-09-19/20）
+
+利用者依頼の 1 件目。参照実装 `~/Desktop/projects/image_transform` の引数語義を 1:1 で複刻した。
+**正本は SPEC §5.4**（7 引数・4 規則・gravity 9 方向の算術・形式表・web/CLI の差）。
+
+- `lib/convertPlan.ts` = 純粋な算術（vips にも DOM にも依存しない）、`workers/vips.ts::applyConvert` =
+  画素操作、`lib/convert.ts` = 編排、`convertSinks.ts` = 出力先（フォルダ / zip）。
+- 出力は**別に選んだフォルダ**か **zip**。入力フォルダには書かないので、元データに対して
+  削除と同格の readwrite 昇格を求めない。フォルダ書き出しは既定 skip・明示で上書き。
+- **JXL を web に積んだ**（`vite.config.ts` の files と `workers/vips.ts` の dynamicLibraries の**両方**）。
+- **CLI の `imgdiff convert` は未実装。** SPEC §5.4 だけ見れば実装できる粒度で算術を書いてある。
+
+**参照実装と食い違う点（実装しないと出ない。CLI を書くときも同じ罠）:**
+
+- **contain は常に目標寸法を返す**（拡大しない縛りで縮小が起きなくても背景で埋める）。
+  **cover は逆に、元が両辺とも目標以下ならそのまま返す。**
+- **`embed` の背景ベクタは画像の bands と本数を合わせる**（合わないと libvips が例外）。
+  グレースケール(1band) / グレー+アルファ(2band) を落とすとその画像で必ず落ちる。
+- **`writeToBuffer` の接尾辞に下線キーを書くと黙って無視される**（`[Q=80,optimize_coding=true]`）。
+  オプションは第 2 引数のオブジェクトで渡す。
+- **`autorot` は意図的に参照実装から外した**（参照側は EXIF 未対応で JPEG→PNG が倒れる）。SPEC に明記。
+
+**繰延べ（実利が出てから）:**
+
+- 幾何算術を `crates/core` へ寄せて CLI と wasm で共有する案。今は SPEC §5.4 に算術を
+  書き下すことで drift を防いでいる（`planDeletions` と同型の判断・§3(A)③ 参照）。
+- zip 出力は全件をメモリに抱えてから 1 つの Blob にする。大量ならフォルダ書き出しを使う想定。
 
 ### 3. Phase 3b 残り（← (A) 実削除 完了・commit 済。次は (B) or (C)）
 
