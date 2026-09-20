@@ -81,15 +81,22 @@ export async function pickDirectory(
   }
 }
 
-/// 2 つのディレクトリが同じ実体を指すか。**入力フォルダへ書き戻さないための検査**に使う
-/// （isSameEntry が無い環境では「同じかもしれない」側へ倒して true を返す＝ fail-closed）。
-export async function isSameDirectory(
-  a: FileSystemDirectoryHandle,
-  b: FileSystemDirectoryHandle,
+/**
+ * `inner` が `outer` と同じか、**その配下か**。入力フォルダへ書き戻さないための検査。
+ *
+ * 同一性（`isSameEntry`）だけでは足りない —— 入力が `写真/` で出力に `写真/out/` を選ばれると
+ * すり抜けて、上書きを許可した状態で元画像が置き換わる。`resolve` は相手が配下なら
+ * ルートからの相対パスを返すので、入れ子もこれ 1 つで捕まる。
+ * **判定できない環境では「危ないかもしれない」側へ倒す**（fail-closed）。
+ */
+export async function isInsideDirectory(
+  outer: FileSystemDirectoryHandle,
+  inner: FileSystemDirectoryHandle,
 ): Promise<boolean> {
-  if (!a.isSameEntry) return true;
   try {
-    return await a.isSameEntry(b);
+    if (outer.isSameEntry && (await outer.isSameEntry(inner))) return true;
+    if (!outer.resolve) return true; // 判定手段が無い
+    return (await outer.resolve(inner)) !== null;
   } catch {
     return true;
   }

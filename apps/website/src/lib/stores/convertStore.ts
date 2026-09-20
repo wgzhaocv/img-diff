@@ -67,6 +67,11 @@ export type ConvertForm = {
   /** 空文字は「入力と同じ形式」。 */
   format: string;
   quality: number;
+  /**
+   * 利用者が画質を触ったか。**同じ形式のまま画質だけ変えて再圧縮する**指定を、
+   * 「何も指定していない」と区別するために要る（参照実装の「`q` を明示したら再符号化」と同じ）。
+   */
+  qualityTouched: boolean;
   destination: Destination;
   /** 出力先に同名が在るとき上書きするか（既定は安全側の false＝ skip）。 */
   overwrite: boolean;
@@ -80,6 +85,7 @@ export const DEFAULT_FORM: ConvertForm = {
   background: "",
   format: "",
   quality: 80,
+  qualityTouched: false,
   destination: "folder",
   overwrite: false,
 };
@@ -150,6 +156,8 @@ export function resolveOptions(form: ConvertForm): { options: ConvertOptions } |
       background,
       format,
       quality: form.quality,
+      // 画質を明示したら、寸法も形式も同じでも再符号化する（素通ししない）。
+      forceReencode: form.qualityTouched,
     },
   };
 }
@@ -180,9 +188,13 @@ export const useConvertStore = create<ConvertState>((set, get) => ({
     if (sources.length === 0) return "変換する画像がありません。";
     const resolved = resolveOptions(form);
     if ("error" in resolved) return resolved.error;
-    // 全件が素通しなら、やることが無い（形式も寸法も指定していない）。
-    if (sources.every((s) => isPassThrough(resolved.options, extOf(s.path)))) {
-      return "変換する指定がありません（寸法か出力形式を指定してください）。";
+    // 画質を触っていれば「同じ形式のまま再圧縮する」という明示の指定なので素通ししない。
+    // 触っていないのに全件が素通しなら、やることが無い。
+    if (
+      !form.qualityTouched &&
+      sources.every((s) => isPassThrough(resolved.options, extOf(s.path)))
+    ) {
+      return "変換する指定がありません（寸法・出力形式・画質のどれかを指定してください）。";
     }
     // 同じ実行の中で出力名が衝突するなら**始める前に**止める（途中で 1 枚ずつ失敗させない）。
     const collisions = findOutputCollisions(sources, resolved.options.format);
@@ -208,10 +220,11 @@ export const useConvertStore = create<ConvertState>((set, get) => ({
       status: "converting",
       items: [],
       stats: null,
+      report: null, // 前回の報告を残すと、失敗・中断したときに古い成功が居座る
       progress: { processed: 0, total: sources.length },
     });
     try {
-      const { items, stats } = await runConvert(
+      const { items, stats, vipsVersion } = await runConvert(
         sources,
         resolved.options,
         sink,
@@ -229,7 +242,7 @@ export const useConvertStore = create<ConvertState>((set, get) => ({
           producer: {
             app: "web",
             appVersion: APP_VERSION,
-            vips: "wasm-vips",
+            vips: vipsVersion || "wasm-vips",
             hashAlgo: HASH_ALGO_VERSION,
           },
           root: get().inputRoot?.name ?? "",

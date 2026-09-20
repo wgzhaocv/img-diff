@@ -6,15 +6,32 @@ import { describe, expect, it } from "vite-plus/test";
 import { streamingZipSink, downloadZipSink } from "@/lib/convertSinks";
 
 /** `FileSystemWritableFileStream` の代役。書き込まれたバイトを全部ためる。 */
-function fakeWritable(): { stream: FileSystemWritableFileStream; bytes: () => Uint8Array } {
+function fakeWritable(): {
+  stream: FileSystemWritableFileStream;
+  bytes: () => Uint8Array;
+  /** close で正常に確定したか（= 保存先にファイルが書き上がったか）。 */
+  closed: () => boolean;
+  /** abort で畳まれたか。 */
+  aborted: () => boolean;
+} {
   const chunks: Uint8Array[] = [];
+  let closed = false;
+  let aborted = false;
   const stream = new WritableStream<Uint8Array>({
     write(chunk) {
       chunks.push(chunk);
     },
+    close() {
+      closed = true;
+    },
+    abort() {
+      aborted = true;
+    },
   });
   return {
     stream: stream as unknown as FileSystemWritableFileStream,
+    closed: () => closed,
+    aborted: () => aborted,
     bytes: () => {
       const total = chunks.reduce((n, c) => n + c.byteLength, 0);
       const out = new Uint8Array(total);
@@ -81,13 +98,26 @@ describe("streamingZipSink", () => {
     ).toEqual([...names].sort());
   });
 
-  it("abort すると中央ディレクトリを書かずに畳む", async () => {
+  it("**abort は書き込み先を確定させない**（空でも「完全な zip」を保存しない）", async () => {
     const w = fakeWritable();
     const sink = streamingZipSink(w.stream);
     void sink.put("a.webp", bytesOf("x"));
     await sink.abort?.(new Error("中断"));
-    // 中断した zip は完成していない（中央ディレクトリが無い）。
+    // 「中央ディレクトリが無い」だけでは足りない —— pipeTo が正常に close すると
+    // 22 バイトの**空だが完全な** zip が保存先に書き上がってしまう。close されないことを見る。
+    expect(w.closed(), "abort したのに close された").toBe(false);
+    expect(w.aborted(), "書き込み先が abort されていない").toBe(true);
     expect(zipEntries(w.bytes())).toEqual([]);
+  });
+
+  it("finish は書き込み先を正常に確定させる（abort との対比）", async () => {
+    const w = fakeWritable();
+    const sink = streamingZipSink(w.stream);
+    await sink.put("a.webp", bytesOf("x"));
+    await sink.finish?.();
+    expect(w.closed()).toBe(true);
+    expect(w.aborted()).toBe(false);
+    expect(zipEntries(w.bytes()).map((e) => e.name)).toEqual(["a.webp"]);
   });
 
   it("put が終わる前に finish しても取りこぼさない", async () => {

@@ -23,7 +23,8 @@ type ZipEntry = { name: string; input: Uint8Array<ArrayBuffer> };
 /**
  * zip をディスクへ**流しながら**書く。`showSaveFilePicker` で保存先を先に取ってあること。
  *
- * client-zip は `ReadableStream` を返せるので、1 件ずつ流し込めば**峰値メモリは 1 枚分**で済む。
+ * client-zip は `ReadableStream` を返せるので、1 件ずつ流し込めば**峰値メモリは同時実行数ぶん**で済む
+ * （全件ではない）。
  * 全件を配列に溜めてから `.blob()` すると、実測で 300 枚 × 1MB が +1245MB（流すと +94MB）、
  * 600 枚 × 2MB では +4.6GB まで膨らむ。しかも流した方が 17% 速い。
  */
@@ -60,8 +61,12 @@ export function streamingZipSink(writable: FileSystemWritableFileStream): Conver
     for (const w of queue.splice(0)) w.taken();
   };
 
+  // **`pipeTo` は writable をロックする。** その状態で `writable.abort()` を直接呼んでも拒否され、
+  // 生成器だけ閉じて pipe が正常終了してしまう＝中断したのに「中身の無い完全な zip」が
+  // 保存先に書き上がる（実測: 22 バイトの EOCD だけの zip）。中断は pipe 自体に伝える。
+  const ac = new AbortController();
   const piped = makeZip(entries())
-    .pipeTo(writable)
+    .pipeTo(writable, { signal: ac.signal })
     .catch((e: unknown) => {
       failure = e;
       drainWaiters();
@@ -84,11 +89,12 @@ export function streamingZipSink(writable: FileSystemWritableFileStream): Conver
       if (failure) throw failure;
     },
     abort: async (reason) => {
-      // 中断時は中央ディレクトリを書かずにストリームごと畳む（半端な zip を残さない）。
+      // pipe ごと中断する。既定で書き込み先も abort されるので、中央ディレクトリは書かれず
+      // 保存先に半端な（あるいは「空だが完全な」）zip が残らない。
+      ac.abort(reason);
       closed = true;
       drainWaiters();
       signal();
-      await writable.abort?.(reason).catch(() => undefined);
       await piped.catch(() => undefined);
     },
   };

@@ -9,7 +9,7 @@ import { ConvertOptions } from "@/components/ConvertOptions";
 import { formatBytes } from "@/lib/format";
 import { toast } from "sonner";
 import {
-  isSameDirectory,
+  isInsideDirectory,
   pickDirectory,
   pickSaveFile,
   supportsFileSystemAccess,
@@ -92,11 +92,20 @@ export function ConvertScreen() {
         return null;
       });
       if (!root) return;
-      // **入力フォルダへは決して書かない**（SPEC §5.4 / 画面の約束）。同じ場所を選ばれたら断る。
+      // **入力フォルダ（とその配下）へは決して書かない**（SPEC §5.4 / 画面の約束）。
       // これが無いと、上書きを許可した状態で元画像が置き換わる。
-      if (inputRoot && (await isSameDirectory(inputRoot, root))) {
-        toast.error("出力先が入力フォルダと同じです", {
-          description: "元の画像を書き換えないため、別のフォルダを選んでください。",
+      if (inputRoot && (await isInsideDirectory(inputRoot, root))) {
+        toast.error("出力先が入力フォルダの中です", {
+          description: "元の画像を書き換えないため、入力とは別のフォルダを選んでください。",
+        });
+        return;
+      }
+      // ドロップで受けた File[] には入力フォルダの handle が無く、**出力先と重ならないことを
+      // 確かめる手段が無い**。上書きを許すと元画像を潰し得るので、この経路では上書きを認めない。
+      if (!inputRoot && form.overwrite) {
+        toast.error("この入力方法では上書きできません", {
+          description:
+            "ドラッグで受け取った画像は元の場所を確認できないため、上書きを外すか、フォルダを選び直してください。",
         });
         return;
       }

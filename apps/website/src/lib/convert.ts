@@ -83,11 +83,13 @@ export async function runConvert(
   pool: HashPool,
   poolSize: number,
   onProgress: (p: ConvertProgress) => void,
-): Promise<{ items: ConvertItem[]; stats: ConvertStats }> {
+): Promise<{ items: ConvertItem[]; stats: ConvertStats; vipsVersion: string }> {
   const started = performance.now();
   const total = sources.length;
   const items: ConvertItem[] = [];
   let processed = 0;
+  // 報告の producer.vips に載せる（ワーカーが実体から取った版）。素通しだけなら分からない。
+  let vipsVersion = "";
 
   try {
     // 同時実行数はプール本数に合わせる。狙いは並列度の制限ではなく**メモリ**
@@ -103,6 +105,7 @@ export async function runConvert(
           ? // 寸法はデコードしないと分からないので 0（SPEC §5.4: 素通しした項目の約束）。
             { data: new Uint8Array(bytes) as Uint8Array<ArrayBuffer>, width: 0, height: 0 }
           : await convertOne(pool, src.path, bytes, options);
+        if (out.vipsVersion) vipsVersion = out.vipsVersion;
         const status = await sink.put(dst, out.data);
         items.push({
           src: src.path,
@@ -140,6 +143,7 @@ export async function runConvert(
   items.sort(byPath);
   return {
     items,
+    vipsVersion,
     stats: {
       scanned: total,
       converted: items.filter((i) => i.status === "converted").length,
@@ -151,7 +155,12 @@ export async function runConvert(
 }
 
 /** 出力バイト列と寸法。素通し（デコードしない）のときは寸法が 0。 */
-type Output = { data: Uint8Array<ArrayBuffer>; width: number; height: number };
+type Output = {
+  data: Uint8Array<ArrayBuffer>;
+  width: number;
+  height: number;
+  vipsVersion?: string;
+};
 
 /** ワーカーへ 1 件投げる。エラーは戻り値で来るので投げ直して呼び出し側の catch に束ねる。 */
 async function convertOne(
@@ -164,7 +173,7 @@ async function convertOne(
     bytes,
   ])) as ConvertResult;
   if (res.error != null || !res.out) throw new Error(res.error ?? "変換に失敗しました");
-  return { data: res.out, width: res.width, height: res.height };
+  return { data: res.out, width: res.width, height: res.height, vipsVersion: res.vipsVersion };
 }
 
 /** 共有カーソルで N 本の runner を走らせる有界並列（scan.ts と同型）。 */

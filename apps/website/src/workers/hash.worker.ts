@@ -139,6 +139,7 @@ async function convertOne(req: Extract<WorkerRequest, { op: "convert" }>): Promi
       out: r.out,
       width: r.width,
       height: r.height,
+      vipsVersion: r.vipsVersion,
     };
   } catch (e) {
     // 1 件の失敗で全体を止めない（SPEC §5.4）。他の op と同じくエラーは戻り値で返す。

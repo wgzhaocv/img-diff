@@ -27,7 +27,11 @@ const SCANNABLE_EXTS = new Set([
  * ——CLI の Windows 版が libjxl 非同梱なため、scan 側に足すと parity が崩れる。
  */
 const CONVERTIBLE_EXTS = new Set(
-  [...SCANNABLE_EXTS, "jxl"].filter(
+  [
+    ...SCANNABLE_EXTS,
+    "jxl", // web のみ（CLI の Windows 版は libjxl 非同梱）
+    "ppm", // SPEC §5.4 の表で読める側
+  ].filter(
     // bmp は wasm-vips に loader が無い（実測: "not in a known format"）。
     // scan 側は CLI の既定 ext に合わせて残すが、convert で受けると必ず per-file 失敗になる。
     (e) => e !== "bmp",

@@ -326,8 +326,16 @@ export interface ConvertOptions {
   background: string | null;
   /** 出力形式（別名正規化後）。入力と同じでよいなら null */
   format: string | null;
-  /** 1..100。形式によっては無視される（gif / ppm） */
+  /**
+   * 1..100。**実際に効くのは jpg / webp / avif / jxl だけ**
+   * （png と tiff は渡しても無視され、gif と ppm は渡すと失敗する）。
+   */
   quality: number;
+  /**
+   * 画質を明示したので、寸法も形式も変わらなくても**再符号化する**（素通ししない）。
+   * 「同じ形式のまま画質だけ落として圧縮し直す」を成立させるために要る。
+   */
+  forceReencode: boolean;
 }
 
 /** convert の 1 件の結果の状態 */
@@ -337,7 +345,10 @@ export type ConvertStatus = "converted" | "skipped" | "failed";
 export interface ConvertItem {
   src: string;
   dst: string;
-  /** 出力の幅・高さ。失敗時は 0 */
+  /**
+   * 出力の幅・高さ。**失敗したときと、素通し（デコードせず元のバイト列を渡した）で
+   * 寸法が分からないときは 0**（SPEC §5.4 規則 4）。
+   */
   width: number;
   height: number;
   /** 出力のバイト数。converted 以外は 0 */

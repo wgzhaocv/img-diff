@@ -59,6 +59,8 @@ export type ConvertResult = {
   out?: Uint8Array<ArrayBuffer>;
   width: number;
   height: number;
+  /** libvips の版（`ConvertReport.producer.vips`）。失敗時は無し。 */
+  vipsVersion?: string;
   error?: string;
 };
 

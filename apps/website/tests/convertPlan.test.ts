@@ -413,3 +413,21 @@ describe("フォーム入力の検証（SPEC §5.4 は w/h を u32 とする）"
     expect(err({ background: "fff" })).toMatch(/16 進数/);
   });
 });
+
+describe("画質だけの再圧縮（forceReencode）", () => {
+  const base = { width: null, height: null, format: null };
+
+  it("画質を明示したら素通ししない（同じ形式のまま圧縮し直せる）", () => {
+    expect(isPassThrough({ ...base, forceReencode: true }, "jpg")).toBe(false);
+  });
+
+  it("触っていなければ従来どおり素通し", () => {
+    expect(isPassThrough({ ...base, forceReencode: false }, "jpg")).toBe(true);
+  });
+
+  it("画質を触っていれば「指定がありません」で断られない", () => {
+    const r = resolveOptions({ ...DEFAULT_FORM, qualityTouched: true, quality: 50 });
+    expect("error" in r).toBe(false);
+    if (!("error" in r)) expect(r.options.forceReencode).toBe(true);
+  });
+});

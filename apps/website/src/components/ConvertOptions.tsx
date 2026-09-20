@@ -173,10 +173,14 @@ export const ConvertOptions = memo(function ConvertOptions({ disabled }: { disab
             max={100}
             step={1}
             value={[form.quality]}
-            onValueChange={([v]) => set("quality", v ?? DEFAULT_FORM.quality)}
+            onValueChange={([v]) =>
+              // 触ったこと自体が「同じ形式でも再圧縮する」という指定になる。
+              setForm({ quality: v ?? DEFAULT_FORM.quality, qualityTouched: true })
+            }
           />
           <p className="text-sm text-muted-foreground">
             jpg・webp・avif・jxl でのみ効きます（png・tiff・gif・ppm では無視されます）。
+            {form.qualityTouched ? " 画質を指定したので、形式が同じでも圧縮し直します。" : null}
           </p>
         </div>
       </fieldset>

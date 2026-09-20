@@ -44,9 +44,15 @@ export function effectiveBackground(bg: string | null | undefined, outFormat: st
  * （実測: 無変換の PNG が 889 → 922 バイト）。読めるが書けない形式（HEIC）もこれで素通りできる。
  */
 export function isPassThrough(
-  o: { width: number | null; height: number | null; format: string | null },
+  o: {
+    width: number | null;
+    height: number | null;
+    format: string | null;
+    forceReencode?: boolean;
+  },
   srcFormat: string,
 ): boolean {
+  if (o.forceReencode === true) return false; // 画質を明示した＝再符号化の意思表示
   if (o.width != null || o.height != null) return false;
   return o.format == null || o.format === normalizeOutFormat(srcFormat);
 }

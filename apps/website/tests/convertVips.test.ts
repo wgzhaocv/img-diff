@@ -66,6 +66,7 @@ const defaults: ConvertOptions = {
   background: "ffffff",
   format: null,
   quality: 80,
+  forceReencode: false,
 };
 
 /**

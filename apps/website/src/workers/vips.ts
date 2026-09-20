@@ -54,6 +54,8 @@ export type Vips = {
   Image: { newFromBuffer(data: Uint8Array, strOptions?: string): VipsImage };
   concurrency(n: number): void;
   Cache: { max(n: number): void; maxMem(n: number): void };
+  /** libvips の版（例 "8.18.3"）。`Producer.vips` に入れる。 */
+  version(): string;
 };
 type VipsFactory = (config?: Record<string, unknown>) => Promise<Vips>;
 
@@ -165,6 +167,10 @@ export type ConvertedImage = {
   out: Uint8Array<ArrayBuffer>;
   width: number;
   height: number;
+  /** 元のバイト列をそのまま返した（再符号化していない）か。 */
+  passedThrough?: boolean;
+  /** libvips の版（`ConvertReport.producer.vips`）。 */
+  vipsVersion: string;
 };
 
 /**
@@ -246,6 +252,23 @@ export function applyConvert(
       gravity: options.gravity,
     });
 
+    // 寸法を指定していても、この画像には効かない（拡大要求など）ことがある。
+    // 出力形式も同じなら**再符号化せず元のバイト列を返す**（SPEC §5.4 規則 4）。
+    // 寸法はデコード済みなので、素通しでも正しい値を返せる。
+    if (
+      !options.forceReencode &&
+      plan.kind === "noop" &&
+      outFormat === normalizeOutFormat(srcFormat)
+    ) {
+      return {
+        out: new Uint8Array(bytes),
+        width: img.width,
+        height: img.height,
+        passedThrough: true,
+        vipsVersion: vips.version(),
+      };
+    }
+
     if (plan.kind === "resize") {
       img = keep(img.resize(plan.scale));
     } else if (plan.kind === "fill") {
@@ -273,7 +296,7 @@ export function applyConvert(
     // TIFF だけ保存前に sRGB へ寄せる（参照実装 save_image.rs と同じ）。
     const target = spec.needsSrgb ? keep(img.colourspace("srgb")) : img;
     const out = new Uint8Array(target.writeToBuffer(spec.suffix, spec.options));
-    return { out, width: target.width, height: target.height };
+    return { out, width: target.width, height: target.height, vipsVersion: vips.version() };
   } finally {
     for (const im of trash) im.delete(); // wasm-vips のメモリは手動解放（leak 防止）。
   }
