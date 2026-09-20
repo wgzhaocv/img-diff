@@ -1,6 +1,7 @@
 import type { DupGroup, ImageRecord, PlannedDeletion } from "@/lib/core";
 import { removeByPath } from "@/lib/fsaccess";
 import { gcOrphans } from "@/lib/db";
+import { errText } from "@/lib/format";
 
 // 重複の実削除（SPEC §5.1 clean）。CLI `crates/cli/src/clean.rs` の安全モデルを web に踏襲する。
 // **重大な差**: CLI はゴミ箱送り（復元可）だが、web にはゴミ箱がなく **removeEntry は恒久削除**。
@@ -50,7 +51,7 @@ export async function applyDeletions(
     try {
       await removeByPath(root, p.path);
     } catch (e) {
-      outcomes.push({ path: p.path, ok: false, error: e instanceof Error ? e.message : String(e) });
+      outcomes.push({ path: p.path, ok: false, error: errText(e) });
       continue;
     }
     deletedPaths.push(p.path);

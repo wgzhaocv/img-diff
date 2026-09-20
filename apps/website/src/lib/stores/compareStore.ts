@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { toast } from "sonner";
 import { compareFiles, type CompareOutcome, type ComparePhase } from "@/lib/compare";
 import { poolRef } from "@/lib/workerPool";
+import { errText } from "@/lib/format";
 
 // compare 画面の状態ストア（zustand）。コンポーネント外に持つのでルート切替でアンマウントされても
 // 選択ファイル・比較結果が保持される。ワーカープールもここで使い回す（暖まったまま＝再比較が速い）。
@@ -33,7 +34,7 @@ export const useCompareStore = create<CompareState>((set, get) => {
       set({ outcome, status: "done" });
     } catch (e) {
       toast.error("比較に失敗しました", {
-        description: e instanceof Error ? e.message : String(e),
+        description: errText(e),
       });
       set({ status: "idle" });
     } finally {

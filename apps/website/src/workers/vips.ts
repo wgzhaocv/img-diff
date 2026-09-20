@@ -36,6 +36,10 @@ type VipsImage = {
   ): VipsImage;
   /** 全画素の平均値（1 バンドに対して呼ぶ）。 */
   avg(): number;
+  /** 全バンドの統計を 1 パスで（行 1..bands が各バンド、列 4 が平均）。 */
+  stats(): VipsImage;
+  /** 1 画素を読む（統計画像から値を取り出すのに使う）。 */
+  getpoint(x: number, y: number): number[];
   writeToMemory(): Uint8Array;
   /** オプションは**必ずこの第 2 引数で**渡す（接尾辞の文字列に下線キーを書くと黙って無視される）。 */
   writeToBuffer(suffix: string, options?: Record<string, unknown>): Uint8Array;
@@ -48,6 +52,7 @@ type VipsImage = {
 export type Vips = {
   Image: { newFromBuffer(data: Uint8Array, strOptions?: string): VipsImage };
   concurrency(n: number): void;
+  Cache: { max(n: number): void; maxMem(n: number): void };
 };
 type VipsFactory = (config?: Record<string, unknown>) => Promise<Vips>;
 
@@ -64,12 +69,17 @@ export function getVips(): Promise<Vips> {
       const mod = (await import(/* @vite-ignore */ vipsUrl)) as { default: VipsFactory };
       const vips = await mod.default({
         locateFile: (f: string) => `/vips/${f}`,
-        // HEIC/AVIF（libheif）・SVG（resvg）・JXL を有効化。動的モジュールなので
-        // 使うときだけ読まれる＝ scan 経路は重くならない。
+        // HEIC/AVIF（libheif）・SVG（resvg）・JXL を有効化。
+        // **init 時に全部読み込まれる**（emscripten の loadDylibs は遅延しない）。実測で
+        // jxl の追加は +2.6ms / +7MB per worker、冷起動のバイト数は 9.27 → 11.34MB。
         // （JXL は convert の入出力で使う。CLI 側は Windows 版が libjxl 非同梱なので web のみ・SPEC §5.4。）
         dynamicLibraries: ["vips-heif.wasm", "vips-resvg.wasm", "vips-jxl.wasm"],
       });
       vips.concurrency(1); // シングルスレッド vips × N ワーカー（DESIGN §4）。
+      // 操作キャッシュを切る。scan も convert も**毎回違う画像**を 1 回ずつ処理するので
+      // ヒット率は 0 で、wasm ヒープ（固定 1GiB・OS へ返さない）を食うだけ。実測 -53MB/worker。
+      vips.Cache.max(0);
+      vips.Cache.maxMem(0);
       return vips;
     })();
   }
@@ -154,8 +164,6 @@ export type ConvertedImage = {
   out: Uint8Array<ArrayBuffer>;
   width: number;
   height: number;
-  /** 実際に書き出した形式（正規化後） */
-  format: string;
 };
 
 /**
@@ -172,14 +180,12 @@ function backgroundFor(img: VipsImage, bg: string): { value: number[]; needsAlph
   if (bg === BG_AVERAGE) {
     const trash: VipsImage[] = [];
     try {
-      // 3band 以上は RGB 各band の平均、それ未満は画像全体の平均（参照実装と同じ非対称）。
-      const whole = img.avg();
-      const bandAvg = (i: number): number => {
-        if (img.bands < 3) return whole;
-        const band = img.extractBand(i);
-        trash.push(band);
-        return band.avg();
-      };
+      // **1 パスで全 band の統計を出す。** band ごとに avg() を呼ぶと毎回パイプライン全体を
+      // 評価し直すことになり、実測で contain が 124.8 → 163.6ms に伸びた（値は同一）。
+      // stats() の行 1..bands が各バンド、列 4 が平均。
+      const st = img.bands >= 3 ? trash[trash.push(img.stats()) - 1] : null;
+      const whole = st ? 0 : img.avg();
+      const bandAvg = (i: number): number => (st ? st.getpoint(4, i + 1)[0] : whole);
       return { value: backgroundVector("", bands, bandAvg), needsAlpha };
     } finally {
       for (const im of trash) im.delete();
@@ -264,7 +270,7 @@ export function applyConvert(
     // TIFF だけ保存前に sRGB へ寄せる（参照実装 save_image.rs と同じ）。
     const target = spec.needsSrgb ? keep(img.colourspace("srgb")) : img;
     const out = new Uint8Array(target.writeToBuffer(spec.suffix, spec.options));
-    return { out, width: target.width, height: target.height, format };
+    return { out, width: target.width, height: target.height };
   } finally {
     for (const im of trash) im.delete(); // wasm-vips のメモリは手動解放（leak 防止）。
   }

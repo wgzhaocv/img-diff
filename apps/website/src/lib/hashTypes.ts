@@ -57,8 +57,6 @@ export type ConvertResult = {
   path: string;
   /** 変換後のバイト列。失敗時は無し。非 SAB（Blob 化・transfer のため）。 */
   out?: Uint8Array<ArrayBuffer>;
-  /** 実際に書き出した形式（正規化後）。失敗時は空文字。 */
-  format: string;
   width: number;
   height: number;
   error?: string;

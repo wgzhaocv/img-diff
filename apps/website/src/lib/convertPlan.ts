@@ -4,7 +4,7 @@
 // 引数の意味と効き方は参照実装 `image_transform` に合わせてある（SPEC §5.4 が正本）。
 // 核は 4 つの規則: 拡大しない / `w`+`h` 両方でのみ fit が効く / bg 既定が出力形式で変わる / no-op 検出。
 
-import type { ConvertFit, ConvertGravity, ConvertOptions } from "schema";
+import type { ConvertFit, ConvertGravity } from "schema";
 
 /** 透明背景を表す番人値（`ConvertOptions.background` に入り得る特別な綴り）。 */
 export const BG_TRANSPARENT = "transparent";
@@ -185,16 +185,6 @@ export function planGeometry(input: PlanInput): ConvertPlan {
   }
   const { x, y } = offset(gravity, Math.max(0, width - midW), Math.max(0, height - midH));
   return { kind: "contain", scale, embed: { x, y, width, height } };
-}
-
-/**
- * 変換の指定が「何もしない」と同義かどうか（SPEC §5.4 規則 4 の前半）。
- * 形式も寸法も変えないなら、デコードすらせず元のバイト列を返せる。
- */
-export function isNoopRequest(o: ConvertOptions, srcFormat: string): boolean {
-  const formatChanges = o.format != null && o.format !== normalizeOutFormat(srcFormat);
-  const resizes = o.width != null || o.height != null;
-  return !formatChanges && !resizes;
 }
 
 /** `writeToBuffer` へ渡す保存指定。 */

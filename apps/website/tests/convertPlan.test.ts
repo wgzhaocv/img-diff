@@ -6,14 +6,14 @@ import type { ConvertGravity } from "schema";
 import {
   clampQuality,
   effectiveBackground,
-  isNoopRequest,
   normalizeOutFormat,
   parseHexRgb,
   backgroundVector,
   planGeometry,
   saveSpec,
 } from "@/lib/convertPlan";
-import { outPathFor } from "@/lib/convert";
+import { findOutputCollisions, outPathFor } from "@/lib/convert";
+import { extOf, isConvertibleImage, isScannableImage, uniquePath } from "@/lib/imagePaths";
 
 const base = { srcW: 100, srcH: 50, fit: "cover", gravity: "center" } as const;
 
@@ -191,31 +191,6 @@ describe("規則 3: bg の既定は出力形式で変わる", () => {
   });
 });
 
-describe("規則 4: no-op 検出", () => {
-  const opts = {
-    width: null,
-    height: null,
-    fit: "cover",
-    gravity: "center",
-    background: "ffffff",
-    format: null,
-    quality: 80,
-  } as const;
-
-  it("形式も寸法も変えないなら no-op", () => {
-    expect(isNoopRequest(opts, "png")).toBe(true);
-  });
-
-  it("形式が同じ（別名違い）でも no-op", () => {
-    expect(isNoopRequest({ ...opts, format: "jpg" }, "jpeg")).toBe(true);
-  });
-
-  it("形式か寸法が変われば no-op ではない", () => {
-    expect(isNoopRequest({ ...opts, format: "webp" }, "png")).toBe(false);
-    expect(isNoopRequest({ ...opts, width: 10 }, "png")).toBe(false);
-  });
-});
-
 describe("形式名と品質", () => {
   it("別名を正規化する（scan.ts とは逆向き）", () => {
     expect(normalizeOutFormat("jpeg")).toBe("jpg");
@@ -307,5 +282,58 @@ describe("出力ファイル名", () => {
     expect(outPathFor("a/b/noext", "png")).toBe("a/b/noext.png");
     expect(outPathFor("a.dir/photo", "png")).toBe("a.dir/photo.png");
     expect(outPathFor("a.dir/photo.jpg", "png")).toBe("a.dir/photo.png");
+  });
+});
+
+describe("出力名の衝突（同じ実行の中で自分同士がぶつかる）", () => {
+  it("形式を変えると別拡張子の同名が衝突することを、始める前に見つける", () => {
+    const c = findOutputCollisions([{ path: "a/x.jpg" }, { path: "a/x.png" }], "webp");
+    expect(c).toEqual([{ dst: "a/x.webp", srcs: ["a/x.jpg", "a/x.png"] }]);
+  });
+
+  it("形式を変えなければ衝突しない", () => {
+    expect(findOutputCollisions([{ path: "a/x.jpg" }, { path: "a/x.png" }], null)).toEqual([]);
+  });
+
+  it("ディレクトリが違えば衝突しない", () => {
+    expect(findOutputCollisions([{ path: "a/x.jpg" }, { path: "b/x.png" }], "webp")).toEqual([]);
+  });
+
+  it("結果は決定的（dst 昇順・srcs 昇順）", () => {
+    const c = findOutputCollisions(
+      [{ path: "z.png" }, { path: "a.gif" }, { path: "z.jpg" }, { path: "a.bmp" }],
+      "webp",
+    );
+    expect(c.map((x) => x.dst)).toEqual(["a.webp", "z.webp"]);
+    expect(c[0].srcs).toEqual(["a.bmp", "a.gif"]);
+  });
+});
+
+describe("ドロップした同名ファイルの取りこぼし防止", () => {
+  it("同名は連番になり、1 件も消えない", () => {
+    const used = new Set<string>();
+    const keys = ["IMG_1.jpg", "IMG_1.jpg", "IMG_1.jpg"].map((n) => {
+      const k = uniquePath(n, used);
+      used.add(k);
+      return k;
+    });
+    expect(keys).toEqual(["IMG_1.jpg", "IMG_1 (2).jpg", "IMG_1 (3).jpg"]);
+    expect(new Set(keys).size).toBe(3);
+  });
+});
+
+describe("拡張子の切り出し", () => {
+  it("ディレクトリ名のドットに騙されない", () => {
+    expect(extOf("a.dir/photo")).toBe("");
+    expect(extOf("a.dir/photo.JPG")).toBe("jpg");
+    expect(extOf("noext")).toBe("");
+  });
+
+  it("scan と convert で対象集合が違う（jxl は convert だけ）", () => {
+    // scan は CLI と結果一致の契約があるので CLI の既定 ext から広げない（SPEC §1 の parity）。
+    expect(isScannableImage("a.jxl")).toBe(false);
+    expect(isConvertibleImage("a.jxl")).toBe(true);
+    expect(isScannableImage("a.png")).toBe(true);
+    expect(isConvertibleImage("a.png")).toBe(true);
   });
 });

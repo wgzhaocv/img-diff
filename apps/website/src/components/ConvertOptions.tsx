@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { ConvertFit, ConvertGravity } from "schema";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -41,7 +42,12 @@ const GRAVITIES: { value: ConvertGravity; label: string }[] = [
   { value: "southeast", label: "右下" },
 ];
 
-export function ConvertOptions({ disabled }: { disabled: boolean }) {
+/**
+ * **memo する。** 親（ConvertScreen）は進捗 tick のたびに再描画され、実測で tick は
+ * 最大 ~580 回/秒に達する。memo が無いと、このフォーム（9 個の gravity ボタン + Tabs ×2 +
+ * Radix Select + Slider）が毎 tick 再描画され、内部の逐字段 selector も意味を成さない。
+ */
+export const ConvertOptions = memo(function ConvertOptions({ disabled }: { disabled: boolean }) {
   const form = useConvertStore((s) => s.form);
   const setForm = useConvertStore((s) => s.setForm);
   const set = <K extends keyof ConvertForm>(k: K, v: ConvertForm[K]): void => setForm({ [k]: v });
@@ -174,4 +180,4 @@ export function ConvertOptions({ disabled }: { disabled: boolean }) {
       </fieldset>
     </div>
   );
-}
+});

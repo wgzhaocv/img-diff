@@ -3,33 +3,10 @@ import type { HashResult, PixelResult } from "@/lib/hashTypes";
 import { HashPool } from "@/lib/workerPool";
 import { gcOrphans, getRootHashes, HASH_ALGO, putHash, putThumb, type HashEntry } from "@/lib/db";
 import { resolveRoot, walkImages } from "@/lib/fsaccess";
-
-// 対象拡張子（CLI の既定 ext と揃える）。
-const IMAGE_EXTS = new Set([
-  "jpg",
-  "jpeg",
-  "png",
-  "webp",
-  "gif",
-  "bmp",
-  "tif",
-  "tiff",
-  "heic",
-  "heif",
-  "avif",
-  "svg",
-]);
+import { compareCodepoint, extOf, isScannableImage, uniquePath } from "@/lib/imagePaths";
 
 // CLI `util.rs::normalize_ext` と揃える（producer 間で ImageRecord.format を一致させる）。
 const FORMAT_ALIAS: Record<string, string> = { jpg: "jpeg", tif: "tiff" };
-
-function extOf(name: string): string {
-  return name.split(".").pop()?.toLowerCase() ?? "";
-}
-
-export function isImageFile(name: string): boolean {
-  return IMAGE_EXTS.has(extOf(name));
-}
 
 /// 名前/パスの拡張子を CLI `util.rs::normalize_ext` と揃えた format 名にする（jpg→jpeg 等）。
 /// worker は libvips のローダ名を返さないため、両端で ImageRecord.format を一致させる近似として使う。
@@ -38,9 +15,9 @@ export function normalizeFormat(path: string): string {
   return FORMAT_ALIAS[ext] ?? ext;
 }
 
-// path 昇順（コードポイント比較＝Rust CLI と決定性を揃える。localeCompare は不可）。SPEC §4。
+// path 昇順（決定性・SPEC §4）。比較子は共有（localeCompare を使わない規則を 1 箇所に）。
 const byPath = (a: { path: string }, b: { path: string }): number =>
-  a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
+  compareCodepoint(a.path, b.path);
 
 export type ScanPhase = "enumerating" | "hash" | "pixel";
 export type ScanProgress = { phase: ScanPhase; processed: number; total: number };
@@ -135,19 +112,6 @@ async function secondPassPixels(
   });
 }
 
-/// path キーを作る。フォルダ選択は webkitRelativePath（一意）。ドロップの loose File は名前が
-/// 衝突し得るので、既存キーがあれば連番を付けて**取りこぼさない**（Map 上書きで静默脱落するのを防ぐ）。
-function uniquePath(base: string, used: Set<string>): string {
-  if (!used.has(base)) return base;
-  const dot = base.lastIndexOf(".");
-  const stem = dot > 0 ? base.slice(0, dot) : base;
-  const ext = dot > 0 ? base.slice(dot) : "";
-  let n = 2;
-  let key = `${stem} (${n})${ext}`;
-  while (used.has(key)) key = `${stem} (${++n})${ext}`;
-  return key;
-}
-
 /// ドロップ / フォールバック input の File[] を索引する（キャッシュ・再開なし・DESIGN §6）。
 export async function runScan(
   files: File[],
@@ -158,7 +122,7 @@ export async function runScan(
   const fileByPath = new Map<string, File>();
   const used = new Set<string>();
   for (const f of files) {
-    if (!isImageFile(f.name)) continue;
+    if (!isScannableImage(f.name)) continue;
     const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath;
     const base = rel && rel.length > 0 ? rel : f.name;
     const key = uniquePath(base, used);
@@ -216,7 +180,7 @@ export async function scanFolder(
   onProgress: (p: ScanProgress) => void,
 ): Promise<ScanResult> {
   const root = await resolveRoot(dirHandle);
-  const files = await walkImages(dirHandle, isImageFile);
+  const files = await walkImages(dirHandle, isScannableImage);
   const cached = await getRootHashes(root.rootId);
 
   // GC: 列挙に無くなった path（OS 側で削除/移動）のキャッシュを掃除して stale を残さない（DESIGN §5）。

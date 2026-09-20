@@ -3,12 +3,13 @@ import { getRoots, putRoot, requestPersistentStorage, type RootEntry } from "@/l
 // File System Access API（Chromium 限定）。フォルダの永続ハンドルで再スキャン高速化・中断再開を成立させる。
 // 非対応ブラウザは呼び出し側が File[] フォールバックへ（DESIGN §6）。
 
-// lib.dom に無い版があるため showDirectoryPicker を最小宣言。
+// lib.dom に無い版があるため showDirectoryPicker / showSaveFilePicker を最小宣言。
 declare global {
   interface Window {
     showDirectoryPicker?: (opts?: {
       mode?: "read" | "readwrite";
     }) => Promise<FileSystemDirectoryHandle>;
+    showSaveFilePicker?: (opts?: { suggestedName?: string }) => Promise<FileSystemFileHandle>;
   }
 }
 
@@ -160,6 +161,21 @@ async function exists(dir: FileSystemDirectoryHandle, name: string): Promise<boo
     return true;
   } catch (e) {
     if (e instanceof DOMException && e.name === "NotFoundError") return false;
+    throw e;
+  }
+}
+
+/// 保存先ファイルを選ばせる（**ユーザー操作内**で呼ぶ）。zip を流し込む先に使う。
+/// 非対応ブラウザ（Firefox / Safari）は null を返すので、呼び出し側がダウンロードへ退避する。
+export async function pickSaveFile(
+  suggestedName: string,
+): Promise<FileSystemWritableFileStream | null> {
+  if (!window.showSaveFilePicker) return null;
+  try {
+    const handle = await window.showSaveFilePicker({ suggestedName });
+    return await handle.createWritable();
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") return null;
     throw e;
   }
 }

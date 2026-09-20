@@ -7,15 +7,19 @@ import { DropZone } from "@/components/DropZone";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { ConvertOptions } from "@/components/ConvertOptions";
 import { formatBytes } from "@/lib/format";
-import { pickDirectory, supportsFileSystemAccess, walkImages } from "@/lib/fsaccess";
+import { toast } from "sonner";
+import { pickDirectory, pickSaveFile, supportsFileSystemAccess, walkImages } from "@/lib/fsaccess";
+import { downloadZipSink, folderSink, streamingZipSink } from "@/lib/convertSinks";
+import { isConvertibleImage, uniquePath } from "@/lib/imagePaths";
+import { errText } from "@/lib/format";
 import type { ConvertSource } from "@/lib/convert";
 import { useConvertStore, type Destination } from "@/lib/stores/convertStore";
 
 // 変換画面（SPEC §5.4）。入力フォルダには一切書かず、出力は「別に選んだフォルダ」か zip。
 // 画面の組み立ては ScanScreen と同型（idle / converting / done の条件レンダリング + 線形バー）。
 
-/** 読み込み対象の拡張子（書けない heic も**読める**ので入力には含める）。 */
-const INPUT_EXT = /\.(jpe?g|png|webp|gif|bmp|tiff?|heic|heif|avif|jxl|svg)$/i;
+/** zip 出力のファイル名。 */
+const ZIP_NAME = "imgdiff-converted.zip";
 
 const DESTINATIONS: { value: Destination; label: string }[] = [
   { value: "folder", label: "フォルダへ保存" },
@@ -23,8 +27,19 @@ const DESTINATIONS: { value: Destination; label: string }[] = [
 ];
 
 export function ConvertScreen() {
-  const { sources, form, status, progress, items, stats, setForm, setSources, run, cancel } =
-    useConvertStore();
+  const {
+    sources,
+    form,
+    status,
+    progress,
+    items,
+    stats,
+    setForm,
+    setSources,
+    run,
+    cancel,
+    validate,
+  } = useConvertStore();
   const [picking, setPicking] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const converting = status === "converting";
@@ -35,7 +50,7 @@ export function ConvertScreen() {
     try {
       const root = await pickDirectory("read");
       if (!root) return;
-      const found = await walkImages(root, (name) => INPUT_EXT.test(name));
+      const found = await walkImages(root, (name) => isConvertibleImage(name));
       setSources(
         found.map(
           (f): ConvertSource => ({
@@ -49,9 +64,49 @@ export function ConvertScreen() {
     }
   }
 
+  /**
+   * 「変換する」。**picker はここ（click の同期 continuation）で開く** — `showDirectoryPicker` は
+   * transient activation を要るので、ストア側で await してからでは手遅れになる。
+   * ブラウザが実際に強制する場所で解決し、ストアには解決済みの sink を渡す。
+   */
+  async function start(): Promise<void> {
+    const problem = validate();
+    if (problem) {
+      toast.error(problem);
+      return;
+    }
+    let sink;
+    if (form.destination === "folder") {
+      // キャンセル（AbortError）は null、権限拒否などは投げる（両者を混ぜると誤診する）。
+      const root = await pickDirectory("readwrite").catch((e: unknown) => {
+        toast.error("出力先フォルダを開けませんでした", { description: errText(e) });
+        return null;
+      });
+      if (!root) return;
+      sink = folderSink(root, form.overwrite);
+    } else {
+      // 保存先を取れるブラウザなら zip をディスクへ流す（峰値メモリが 1 枚分で済む）。
+      // 取れない（Firefox / Safari）ときだけメモリに組み立ててダウンロードへ退避する。
+      const writable = await pickSaveFile(ZIP_NAME).catch((e: unknown) => {
+        toast.error("保存先を開けませんでした", { description: errText(e) });
+        return null;
+      });
+      sink = writable ? streamingZipSink(writable) : downloadZipSink(ZIP_NAME);
+    }
+    await run(sink);
+  }
+
   function takeFiles(files: File[]): void {
-    const imgs = files.filter((f) => INPUT_EXT.test(f.name));
-    setSources(imgs.map((f): ConvertSource => ({ path: f.name, bytes: () => f.arrayBuffer() })));
+    const imgs = files.filter((f) => isConvertibleImage(f.name));
+    // ドロップの loose File は別フォルダの同名が衝突し得る。scan と同じく連番で取りこぼさない。
+    const used = new Set<string>();
+    setSources(
+      imgs.map((f): ConvertSource => {
+        const path = uniquePath(f.name, used);
+        used.add(path);
+        return { path, bytes: () => f.arrayBuffer() };
+      }),
+    );
   }
 
   return (
@@ -152,7 +207,7 @@ export function ConvertScreen() {
           </fieldset>
 
           <div className="flex items-center gap-3">
-            <Button onClick={() => void run()} disabled={converting} className="gap-1.5">
+            <Button onClick={() => void start()} disabled={converting} className="gap-1.5">
               <Replace className="size-4" />
               変換する
             </Button>

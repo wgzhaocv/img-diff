@@ -68,41 +68,68 @@ const defaults: ConvertOptions = {
   quality: 80,
 };
 
-/** 出力バイト列を読み直して寸法とバンド数を見る。 */
-function inspect(out: Uint8Array): { width: number; height: number; bands: number } {
+/**
+ * 出力バイト列を**読み直して**寸法・バンド数・ローダ名を見る。
+ * ローダ名は libvips が magic から選んだ物なので、「書けたと主張している形式」ではなく
+ * 「実際に何で書かれたか」の証拠になる。
+ */
+function inspect(out: Uint8Array): {
+  width: number;
+  height: number;
+  bands: number;
+  loader: string;
+} {
   const v = vips as unknown as {
     Image: {
       newFromBuffer(d: Uint8Array): {
         width: number;
         height: number;
         bands: number;
+        getString(name: string): string;
         delete(): void;
       };
     };
   };
   const im = v.Image.newFromBuffer(out);
-  const r = { width: im.width, height: im.height, bands: im.bands };
+  const r = {
+    width: im.width,
+    height: im.height,
+    bands: im.bands,
+    loader: im.getString("vips-loader"),
+  };
   im.delete();
   return r;
 }
 
 describe("出力形式", () => {
+  // 期待するローダ名（libvips が magic から選ぶ物＝**実際に何で書かれたか**の証拠。
+  // 実装の自己申告ではないので、保存器を取り違えたら必ず落ちる）。
+  const LOADER: Record<string, string> = {
+    jpg: "jpegload_buffer",
+    png: "pngload_buffer",
+    webp: "webpload_buffer",
+    gif: "gifload_buffer",
+    tiff: "tiffload_buffer",
+    ppm: "ppmload_buffer",
+    avif: "heifload_buffer",
+    jxl: "jxlload_buffer",
+  };
+
   it("書ける形式をすべて往復できる（jxl / avif を含む）", () => {
-    for (const format of ["jpg", "png", "webp", "gif", "tiff", "ppm", "avif", "jxl"]) {
+    for (const [format, loader] of Object.entries(LOADER)) {
       const r = applyConvert(vips, squarePng, { ...defaults, format }, "png");
-      expect(r.format, format).toBe(format);
       expect(r.out.byteLength, format).toBeGreaterThan(0);
-      expect(inspect(r.out).width, format).toBe(100);
+      const got = inspect(r.out);
+      expect(got.width, format).toBe(100);
+      expect(got.loader, format).toBe(loader);
     }
   });
 
   it("別名は正規化される（jpeg → jpg / tif → tiff）", () => {
-    expect(applyConvert(vips, squarePng, { ...defaults, format: "jpeg" }, "png").format).toBe(
-      "jpg",
-    );
-    expect(applyConvert(vips, squarePng, { ...defaults, format: "tif" }, "png").format).toBe(
-      "tiff",
-    );
+    const of = (format: string): string =>
+      inspect(applyConvert(vips, squarePng, { ...defaults, format }, "png").out).loader;
+    expect(of("jpeg")).toBe("jpegload_buffer");
+    expect(of("tif")).toBe("tiffload_buffer");
   });
 
   it("heic は書けない（SPEC §5.4 でやらないと決めた形式）", () => {

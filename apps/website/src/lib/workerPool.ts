@@ -1,5 +1,20 @@
 import type { WorkerRequest, WorkerResponse } from "@/lib/hashTypes";
 
+/**
+ * プールの破棄（= 利用者による中断）で submit が失敗したことを表す。
+ *
+ * **1 件ごとの変換失敗と区別できる型が要る。** 区別できないと、編排層の per-file な
+ * try/catch が中断の reject まで「その 1 件が失敗した」として飲み込み、
+ * 残り全部を failed として記録したうえで**正常終了**してしまう（＝中断したのに
+ * 「N 件変換・M 件失敗」と表示される）。
+ */
+export class PoolAbortError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PoolAbortError";
+  }
+}
+
 type Pending = { resolve: (r: WorkerResponse) => void; reject: (e: unknown) => void };
 type Waiting = { req: WorkerRequest; transfer: Transferable[] } & Pending;
 
@@ -80,9 +95,10 @@ export class HashPool {
 
   /// 破棄。走行中・待機中の Promise はすべて reject する（宙ぶらりを残さない）。
   /// **破棄したプールは再利用できない** — 作り直しは [`poolRef`] が面倒を見る。
+  /// reject する理由は [`PoolAbortError`]。編排層が「1 件の失敗」と「中断」を区別できるようにする。
   terminate(reason = "処理が中断されました"): void {
     this.disposed = true;
-    const aborted = new Error(reason);
+    const aborted = new PoolAbortError(reason);
     for (const task of this.queue) task.reject(aborted);
     this.queue.length = 0;
     for (const p of this.pending.values()) p.reject(aborted);

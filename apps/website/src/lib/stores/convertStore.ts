@@ -1,11 +1,16 @@
 import { create } from "zustand";
 import { toast } from "sonner";
 import type { ConvertItem, ConvertOptions, ConvertStats } from "schema";
-import { runConvert, type ConvertProgress, type ConvertSource } from "@/lib/convert";
-import { folderSink, zipSink } from "@/lib/convertSinks";
+import {
+  findOutputCollisions,
+  runConvert,
+  type ConvertProgress,
+  type ConvertSink,
+  type ConvertSource,
+} from "@/lib/convert";
 import { effectiveBackground, normalizeOutFormat, parseHexRgb } from "@/lib/convertPlan";
-import { pickDirectory } from "@/lib/fsaccess";
-import { defaultPoolSize, poolRef } from "@/lib/workerPool";
+import { defaultPoolSize, PoolAbortError, poolRef } from "@/lib/workerPool";
+import { errText } from "@/lib/format";
 
 // convert 画面の状態ストア（zustand）。scanStore と同じ作法:
 // コンポーネント外に持つのでルート切替でも結果が残り、ワーカープールも暖まったまま使い回す。
@@ -14,6 +19,26 @@ const POOL_SIZE = defaultPoolSize();
 // scan とは**別の持ち手**にする（共有すると convert の中断が走行中の scan を巻き込む）。
 const pool = poolRef(POOL_SIZE);
 let running = false; // 二重起動防止（描画に無関係なのでストア外）。
+
+/**
+ * 進捗の set をフレームに 1 回へ合流させる。
+ *
+ * `onProgress` は 1 件終わるごとに呼ばれ、各 worker の postMessage コールバック＝別マクロタスク
+ * なので React は跨いでバッチしない。実測で小さい画像だと ~580 回/秒に達し、そのたびに
+ * 画面全体が再描画される。進捗バーはフレームに 1 回で足りる。
+ */
+function rafThrottle<T>(apply: (v: T) => void): (v: T) => void {
+  let latest: T | null = null;
+  let scheduled = 0;
+  return (v: T) => {
+    latest = v;
+    if (scheduled) return;
+    scheduled = requestAnimationFrame(() => {
+      scheduled = 0;
+      if (latest !== null) apply(latest);
+    });
+  };
+}
 
 type Status = "idle" | "converting" | "done";
 
@@ -58,8 +83,16 @@ type ConvertState = {
   stats: ConvertStats | null;
   setForm: (patch: Partial<ConvertForm>) => void;
   setSources: (sources: ConvertSource[]) => void;
-  /** 実行（**click の同期continuation から呼ぶこと** — 出力フォルダ選択が transient activation を要る）。 */
-  run: () => Promise<void>;
+  /**
+   * 実行。**出力先（sink）は呼び出し側が先に用意して渡す。**
+   * 出力フォルダの選択は `showDirectoryPicker` ＝ transient activation を要るので、
+   * ここで await したら手遅れ。ブラウザが実際に強制する場所（click ハンドラ）で解決させ、
+   * このストアは「隠れた前提を持たない純粋な非同期編排」に保つ
+   * （`DeleteDuplicatesButton` が `requestWritePermission` に対して取っているのと同じ形）。
+   */
+  run: (sink: ConvertSink) => Promise<void>;
+  /** 実行前の検査。エラー文言を返したら実行しない。 */
+  validate: () => string | null;
   /** 中断。プールを破棄して作り直す。 */
   cancel: () => void;
   reset: () => void;
@@ -113,29 +146,28 @@ export const useConvertStore = create<ConvertState>((set, get) => ({
     pool.reset("変換を中断しました");
   },
 
-  run: async () => {
+  validate: () => {
+    const { sources, form } = get();
+    if (sources.length === 0) return "変換する画像がありません。";
+    const resolved = resolveOptions(form);
+    if ("error" in resolved) return resolved.error;
+    // 同じ実行の中で出力名が衝突するなら**始める前に**止める（途中で 1 枚ずつ失敗させない）。
+    const collisions = findOutputCollisions(sources, resolved.options.format);
+    if (collisions.length > 0) {
+      const first = collisions[0];
+      const more = collisions.length > 1 ? `ほか ${collisions.length - 1} 件` : "";
+      return `出力名が重なります: ${first.srcs.join(" と ")} がどちらも ${first.dst} になります。${more}`;
+    }
+    return null;
+  },
+
+  run: async (sink: ConvertSink) => {
     if (running) return;
     const { sources, form } = get();
-    if (sources.length === 0) return;
-
     const resolved = resolveOptions(form);
     if ("error" in resolved) {
       toast.error(resolved.error);
       return;
-    }
-
-    // **出力先の選択はネットワークも await も挟まずここで**。showDirectoryPicker は
-    // transient activation（click の直後）でしか開けないので、変換してから聞くのでは遅い。
-    let sink;
-    if (form.destination === "folder") {
-      const root = await pickDirectory("readwrite").catch(() => null);
-      if (!root) {
-        toast.error("出力先フォルダが選ばれませんでした。");
-        return;
-      }
-      sink = folderSink(root, form.overwrite);
-    } else {
-      sink = zipSink("imgdiff-converted.zip");
     }
 
     running = true;
@@ -152,7 +184,7 @@ export const useConvertStore = create<ConvertState>((set, get) => ({
         sink,
         pool.get(),
         POOL_SIZE,
-        (progress) => set({ progress }),
+        rafThrottle<ConvertProgress>((progress) => set({ progress })),
       );
       set({ items, stats, status: "done" });
       if (stats.failed > 0) {
@@ -163,11 +195,14 @@ export const useConvertStore = create<ConvertState>((set, get) => ({
         toast.success(`${stats.converted} 件を変換しました（${stats.skipped} 件 skip）`);
       }
     } catch (e) {
-      // 中断（プール破棄）もここに来る。結果は捨てて idle へ戻す。
+      // 中断（プール破棄）と、編排自体の失敗を区別する。1 件ごとの変換失敗はここへ来ない
+      // （`runConvert` が per-file に記録して正常終了する）。
       set({ status: "idle" });
-      toast.error("変換を中止しました", {
-        description: e instanceof Error ? e.message : String(e),
-      });
+      if (e instanceof PoolAbortError) {
+        toast.info("変換を中断しました");
+      } else {
+        toast.error("変換を中止しました", { description: errText(e) });
+      }
     } finally {
       running = false;
     }

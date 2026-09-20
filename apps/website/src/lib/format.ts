@@ -10,3 +10,11 @@ export function formatBytes(n: number): string {
   }
   return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
 }
+
+/**
+ * 例外を表示できる文字列にする。`Error` 以外（worker 越しに来た値・throw された文字列）も扱う。
+ * toast の説明にも `ConvertItem.error` のような**報告に載る値**にも使うので 1 箇所に置く。
+ */
+export function errText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}

@@ -4,7 +4,7 @@ import { runScan, scanFolder, type ScanProgress, type ScanResult } from "@/lib/s
 import { clusterGroup, type DupGroup, type Strictness } from "@/lib/core";
 import { applyDeletions, planDeletions, type CleanResult } from "@/lib/clean";
 import { requestWritePermission } from "@/lib/fsaccess";
-import { formatBytes } from "@/lib/format";
+import { formatBytes, errText } from "@/lib/format";
 import { defaultPoolSize, poolRef } from "@/lib/workerPool";
 
 // scan 画面の状態ストア（zustand）。コンポーネント外に持つのでルート切替でアンマウントされても
@@ -84,7 +84,7 @@ export const useScanStore = create<ScanState>((set, get) => {
       void recluster();
     } catch (e) {
       toast.error("スキャンに失敗しました", {
-        description: e instanceof Error ? e.message : String(e),
+        description: errText(e),
       });
       set({ status: "idle" });
     } finally {
@@ -152,7 +152,7 @@ export const useScanStore = create<ScanState>((set, get) => {
       return res;
     } catch (e) {
       toast.error("削除に失敗しました", {
-        description: e instanceof Error ? e.message : String(e),
+        description: errText(e),
       });
       return null;
     } finally {

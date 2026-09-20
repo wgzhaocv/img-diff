@@ -2,6 +2,7 @@
 import init, { flatten_and_dhash, flatten_on_white } from "@/wasm/imgdiff_wasm";
 import wasmUrl from "@/wasm/imgdiff_wasm_bg.wasm?url";
 import { convertBuffer, decodeCanonical } from "./vips";
+import { errText } from "@/lib/format";
 import type {
   ConvertResult,
   DecodeResult,
@@ -47,7 +48,7 @@ async function decodeFull(req: WorkerRequest): Promise<Decoded> {
     const phash = flatten_and_dhash(rgba, width, height); // rgba は in-place 白平坦化される（＝返す RGBA）。
     return { sha256, bytes, phash, width, height, rgba, thumb };
   } catch (e) {
-    return { sha256, bytes, error: e instanceof Error ? e.message : String(e) };
+    return { sha256, bytes, error: errText(e) };
   }
 }
 
@@ -92,7 +93,7 @@ async function pixelOne(req: WorkerRequest): Promise<PixelResult> {
       op: "pixel",
       path: req.path,
       pixelSha256: null,
-      error: e instanceof Error ? e.message : String(e),
+      error: errText(e),
     };
   }
 }
@@ -136,7 +137,6 @@ async function convertOne(req: Extract<WorkerRequest, { op: "convert" }>): Promi
       op: "convert",
       path: req.path,
       out: r.out,
-      format: r.format,
       width: r.width,
       height: r.height,
     };
@@ -145,10 +145,9 @@ async function convertOne(req: Extract<WorkerRequest, { op: "convert" }>): Promi
     return {
       op: "convert",
       path: req.path,
-      format: "",
       width: 0,
       height: 0,
-      error: e instanceof Error ? e.message : String(e),
+      error: errText(e),
     };
   }
 }
