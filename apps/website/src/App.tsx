@@ -62,6 +62,8 @@ export function App() {
           <Route path="/compare" element={<CompareScreen />} />
           <Route path="/convert" element={<ConvertScreen />} />
           <Route path="/install" element={<InstallScreen />} />
+          {/* 未知のパスは scan へ。静的配信側のルート複製は vite.config の
+              emitRouteFallbacks が `@/routes` の ROUTES から作る（足すときは両方が揃う）。 */}
           <Route path="*" element={<Navigate to="/scan" replace />} />
         </Routes>
       </main>

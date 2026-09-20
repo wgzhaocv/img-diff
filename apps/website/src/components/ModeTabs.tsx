@@ -3,7 +3,10 @@ import { useLocation, useNavigate } from "react-router";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 
-type ModeValue = "scan" | "compare" | "convert";
+import type { RoutePath } from "@/routes";
+
+// 「モード」＝処理画面のタブ。install は補助ページなのでヘッダ右のリンク（App.tsx）。
+type ModeValue = Extract<RoutePath, "scan" | "compare" | "convert">;
 type Mode = { value: ModeValue; label: string; Icon: LucideIcon };
 
 // モード定義は 1 箇所（desktop / mobile の二重定義を避ける）。

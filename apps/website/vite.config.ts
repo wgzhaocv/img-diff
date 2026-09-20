@@ -3,6 +3,7 @@ import type { PluginOption } from "vite-plus";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { copyFile, mkdir } from "node:fs/promises";
+import { ROUTES } from "./src/routes";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
@@ -50,11 +51,35 @@ function serveVipsInDev(): PluginOption {
   };
 }
 
+/**
+ * 各ルートに `index.html` の複製を置く（静的ホスティングには SPA フォールバックが無い）。
+ *
+ * これが無いと `/convert` を直接開く・再読み込みするだけで**素の 404** になる。
+ * `/` から辿ると client-side ルーティングで動いてしまうので、気づかないまま出荷しやすい。
+ * 平台は `/convert` と `/convert/` を同じ＝そのディレクトリの `index.html` として配るので、
+ * 複製を置けばクリーンな URL のまま直リンクと再読み込みが通る。
+ */
+function emitRouteFallbacks(): PluginOption {
+  return {
+    name: "emit-route-fallbacks",
+    apply: "build",
+    async closeBundle() {
+      const dist = fileURLToPath(new URL("./dist", import.meta.url));
+      await Promise.all(
+        ROUTES.map(async (route) => {
+          await mkdir(join(dist, route), { recursive: true });
+          await copyFile(join(dist, "index.html"), join(dist, route, "index.html"));
+        }),
+      );
+    },
+  };
+}
+
 // img-diff web フロント。React + Tailwind v4 + shadcn/ui + wasm（crates/wasm）+ wasm-vips。
 // dev サーバでも COOP/COEP を付け cross-origin isolation を有効化する
 // （SharedArrayBuffer が要る wasm-vips のため。本番は public/_headers で付与）。
 export default defineConfig({
-  plugins: [react(), tailwindcss(), copyWasmVips(), serveVipsInDev()],
+  plugins: [react(), tailwindcss(), copyWasmVips(), serveVipsInDev(), emitRouteFallbacks()],
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
