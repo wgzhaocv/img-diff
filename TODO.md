@@ -28,7 +28,7 @@
 ### 1. 配布（Windows 完了・macOS 完了(pre-release)・Linux 未着手）
 
 - **web の install ページ**: 完了（Phase 4b）。macOS タブはプレビルド配布（`curl | bash`）に差し替え済み。
-- **macOS パッケージ 完了（v0.1.5 / `aarch64-apple-darwin`）**: `scripts/package-macos.sh`。
+- **macOS パッケージ 完了（v0.1.6 / `aarch64-apple-darwin`）**: `scripts/package-macos.sh`。
   `dylibbundler` で dylib 閉包（76 個 / 55MB）を集めて `@executable_path/../lib` へ書き換え + ad-hoc 署名、
   `vips-heif` / `vips-jxl` モジュール同梱、`ditto -c -k --keepParent` で zip。
   **macOS 26+ / Apple Silicon 専用**（Homebrew ボトルの `LC_BUILD_VERSION minos` が 26.0 のため。
@@ -40,7 +40,9 @@
     **不十分**（dlopen は PATH と無関係）。`DYLD_PRINT_LIBRARIES=1` で libvips の像が 1 つか数えること。
   - **繰延べ**: fontconfig の設定パス（`/opt/homebrew/etc/fonts`）は同梱していないので、
     `render` で**文字入り SVG** を描くとフォントが代替される。scan/compare/HEIC には影響なし。
-- **リリース済み**: [v0.1.5](https://github.com/wgzhaocv/img-diff/releases/tag/v0.1.5) を **pre-release** で公開
+- **リリース済み**: [v0.1.6](https://github.com/wgzhaocv/img-diff/releases/tag/v0.1.6) を **pre-release** で公開
+  （v0.1.5 も pre-release のまま残してある。差分は「存在しないフォルダを scan/clean/find が
+  `not_found` で断る」修正のみ）
   （資産 = mac zip + `manifest.json` + `manifest-aarch64-apple-darwin.json`）。web も本番反映済み
   （version `d6d87e71`）。**`releases/latest` は v0.1.4 のまま**＝ Windows の導入と自己更新は無傷
   （API で確認済み）。実機で `curl | bash` → scan（HEIC/AVIF/JXL）→ `update`（「すでに最新です」）→
@@ -48,12 +50,12 @@
 
 - **▶ 次にやる収尾（Windows 機で。この順に）**:
   1. `bash scripts/package-windows.sh` → `target/win-package/` に zip と `manifest-x86_64-pc-windows-gnu.json`
-  2. mac 側の断片を v0.1.5 のリリース資産から取る
-     （`gh release download v0.1.5 -p 'manifest-aarch64-apple-darwin.json'`。
+  2. mac 側の断片を v0.1.6 のリリース資産から取る
+     （`gh release download v0.1.6 -p 'manifest-aarch64-apple-darwin.json'`。
      ローカルの `target/macos-package/` は `cargo clean` で消えるので**リリースから取る**）
   3. `bash scripts/merge-manifest.sh manifest.json manifest-*.json` → 2 target 入りの `manifest.json`
-  4. `gh release upload v0.1.5 --clobber <win zip> manifest.json manifest-x86_64-pc-windows-gnu.json`
-  5. `gh release edit v0.1.5 --prerelease=false` で **latest に昇格**
+  4. `gh release upload v0.1.6 --clobber <win zip> manifest.json manifest-x86_64-pc-windows-gnu.json`
+  5. `gh release edit v0.1.6 --prerelease=false` で **latest に昇格**
   6. `apps/website/public/install.sh` の `BASE` を `https://github.com/$REPO/releases/latest/download` に戻して
      `TAG` を消す。`InstallScreen.tsx` の `MACOS_RELEASE_URL` を `RELEASES_URL` に統一。deploy。
      （`package-macos.sh` の tag 固定チェックは「tag を書いていなければ素通し」なので、

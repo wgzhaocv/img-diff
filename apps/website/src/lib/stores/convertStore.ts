@@ -10,7 +10,7 @@ import {
 } from "schema";
 
 /** web の版（`ConvertReport.producer.appVersion`）。 */
-const APP_VERSION = "0.1.5";
+const APP_VERSION = "0.1.6";
 import {
   findOutputCollisions,
   runConvert,

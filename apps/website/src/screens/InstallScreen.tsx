@@ -14,7 +14,7 @@ const RELEASES_URL = "https://github.com/wgzhaocv/img-diff/releases/latest";
 // タグを直接指す。**Windows 版が揃って正式リリースへ昇格したら RELEASES_URL に統一する。**
 // tag が古いまま発版すると無言で古い版を案内するので、scripts/package-macos.sh が
 // 「このファイルの tag == パッケージの版」を毎回検査して止める（public/install.sh も同様）。
-const MACOS_RELEASE_URL = "https://github.com/wgzhaocv/img-diff/releases/tag/v0.1.5";
+const MACOS_RELEASE_URL = "https://github.com/wgzhaocv/img-diff/releases/tag/v0.1.6";
 
 type OS = "windows" | "macos" | "linux";
 const OS_TABS: { value: OS; label: string }[] = [

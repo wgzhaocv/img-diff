@@ -92,6 +92,8 @@ echo "=== dedupe LC_RPATH ===" >&2
 for f in "${MACHO[@]}"; do
   changed=0
   while read -r n p; do
+    # LC_RPATH を 1 つも持たない Mach-O では空行が来る（`[: : integer expected` になるので弾く）。
+    [ -n "$n" ] || continue
     while [ "$n" -gt 1 ]; do
       install_name_tool -delete_rpath "$p" "$f"
       echo "  $f: 重複 rpath を削除 ($p)" >&2

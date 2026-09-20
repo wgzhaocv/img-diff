@@ -17,7 +17,7 @@ TARGET='aarch64-apple-darwin'
 # BASE を https://github.com/$REPO/releases/latest/download に替えて TAG を消す。**
 # （tag を固定したまま発版すると無言で古い版を配り続けるので、
 #   scripts/package-macos.sh が「ここの tag == パッケージの版」を毎回検査して止める。）
-TAG="${IMGDIFF_TAG:-v0.1.5}"
+TAG="${IMGDIFF_TAG:-v0.1.6}"
 BASE="https://github.com/$REPO/releases/download/$TAG"
 DEST_PARENT="${XDG_DATA_HOME:-$HOME/.local/share}"
 DEST="$DEST_PARENT/imgdiff"   # zip の先頭が imgdiff/ なので親へ展開するとここになる
