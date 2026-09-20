@@ -2,6 +2,7 @@
 //! WalkDir 収集 → 並列デコード+ハッシュ（redb キャッシュ） → pixelSha256 剪定 → clustering。
 //! libvips デコードは CLI 専有のため core でなくここに置く。
 
+use crate::error::CliError;
 use crate::{cache, pipeline};
 use anyhow::Result;
 use imgdiff_core::report::{DupGroup, ImageRecord, SkippedFile, Strictness, HASH_ALGO_VERSION};
@@ -74,6 +75,19 @@ impl Hashed {
 /// `strictness`/`threshold` はここでは未使用（clustering しないため）。`quiet`（= json）で進捗を隠す。
 pub fn hash_folder(opts: &IndexOptions, quiet: bool) -> Result<(Vec<Hashed>, Vec<SkippedFile>)> {
     let root = opts.folder.as_path();
+    // 入口が無ければ**エラーにする**。WalkDir は存在しない根を「0 件」として返すので、
+    // そのままだとパスの打ち間違いが「重複は 0 件でした」という**成功に見える答え**になる
+    // （render は既にこの検査を持っている。compare も not_found を返す）。
+    if !root.is_dir() {
+        return Err(CliError::new(
+            "not_found",
+            format!(
+                "{}: フォルダが見つかりません（パスを確認してください）",
+                root.display()
+            ),
+        )
+        .into());
+    }
     let max_depth = if opts.recurse { usize::MAX } else { 1 };
 
     // スキャン。権限拒否などのエントリエラーは握り潰さず skippedFiles に記録する。
@@ -270,4 +284,50 @@ fn rel_path(path: &Path, root: &Path) -> String {
         .map(|c| c.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()
         .join("/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn opts(folder: PathBuf) -> IndexOptions {
+        IndexOptions {
+            folder,
+            strictness: Strictness::Exact,
+            threshold: None,
+            ext: parse_exts("png"),
+            recurse: false,
+            no_cache: true,
+            cache_dir: None,
+        }
+    }
+
+    fn not_found_code(o: &IndexOptions) -> &'static str {
+        let err = match hash_folder(o, true) {
+            Err(e) => e,
+            Ok(_) => panic!("エラーになるはず"),
+        };
+        err.downcast_ref::<CliError>()
+            .expect("CliError のはず")
+            .code
+    }
+
+    /// 打ち間違えたパスが「0 件でした」という**成功に見える答え**にならないこと。
+    /// scan / clean / find はすべてこの入口を通るので、ここ 1 つで 3 コマンドを守る。
+    #[test]
+    fn missing_folder_is_not_found() {
+        assert_eq!(
+            not_found_code(&opts(PathBuf::from("/definitely/not/here"))),
+            "not_found"
+        );
+    }
+
+    /// ファイルをフォルダとして渡した場合も同じ（黙って 0 件にしない）。
+    #[test]
+    fn file_given_as_folder_is_not_found() {
+        let f = std::env::temp_dir().join(format!("imgdiff-idx-{}.txt", std::process::id()));
+        std::fs::write(&f, b"x").unwrap();
+        assert_eq!(not_found_code(&opts(f.clone())), "not_found");
+        std::fs::remove_file(&f).ok();
+    }
 }
