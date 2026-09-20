@@ -26,7 +26,13 @@ const SCANNABLE_EXTS = new Set([
  * SPEC §5.4）ので、wasm-vips が読める物はすべて受ける。`jxl` はここにだけ在る
  * ——CLI の Windows 版が libjxl 非同梱なため、scan 側に足すと parity が崩れる。
  */
-const CONVERTIBLE_EXTS = new Set([...SCANNABLE_EXTS, "jxl"]);
+const CONVERTIBLE_EXTS = new Set(
+  [...SCANNABLE_EXTS, "jxl"].filter(
+    // bmp は wasm-vips に loader が無い（実測: "not in a known format"）。
+    // scan 側は CLI の既定 ext に合わせて残すが、convert で受けると必ず per-file 失敗になる。
+    (e) => e !== "bmp",
+  ),
+);
 
 /**
  * 拡張子（小文字・ドット無し）。ディレクトリ名にドットが在っても誤らないよう、

@@ -6,6 +6,7 @@ import type { ConvertGravity } from "schema";
 import {
   clampQuality,
   effectiveBackground,
+  isPassThrough,
   normalizeOutFormat,
   parseHexRgb,
   backgroundVector,
@@ -14,6 +15,7 @@ import {
 } from "@/lib/convertPlan";
 import { findOutputCollisions, outPathFor } from "@/lib/convert";
 import { extOf, isConvertibleImage, isScannableImage, uniquePath } from "@/lib/imagePaths";
+import { DEFAULT_FORM, resolveOptions } from "@/lib/stores/convertStore";
 
 const base = { srcW: 100, srcH: 50, fit: "cover", gravity: "center" } as const;
 
@@ -335,5 +337,79 @@ describe("拡張子の切り出し", () => {
     expect(isConvertibleImage("a.jxl")).toBe(true);
     expect(isScannableImage("a.png")).toBe(true);
     expect(isConvertibleImage("a.png")).toBe(true);
+  });
+});
+
+describe("素通し（SPEC §5.4 規則 4）", () => {
+  const base = { width: null, height: null, format: null };
+
+  it("寸法も形式も指定していなければ素通し", () => {
+    expect(isPassThrough(base, "png")).toBe(true);
+  });
+
+  it("出力形式が入力と同じ（別名違いを含む）なら素通し", () => {
+    expect(isPassThrough({ ...base, format: "jpg" }, "jpeg")).toBe(true);
+    expect(isPassThrough({ ...base, format: "tiff" }, "tif")).toBe(true);
+  });
+
+  it("寸法か形式が変われば素通しではない", () => {
+    expect(isPassThrough({ ...base, width: 100 }, "png")).toBe(false);
+    expect(isPassThrough({ ...base, format: "webp" }, "png")).toBe(false);
+  });
+
+  it("読めるが書けない HEIC も、変換不要なら素通りできる", () => {
+    expect(isPassThrough(base, "heic")).toBe(true);
+  });
+});
+
+describe("背景の既定は出力形式ごとに解決する", () => {
+  it("透過を保てる形式は透明、それ以外は白", () => {
+    expect(effectiveBackground(null, "png")).toBe("transparent");
+    expect(effectiveBackground(null, "tif")).toBe("transparent"); // 別名も正規化して判定
+    expect(effectiveBackground(null, "jpg")).toBe("ffffff");
+  });
+
+  it("明示指定が既定に勝つ", () => {
+    expect(effectiveBackground("average", "png")).toBe("average");
+  });
+});
+
+describe("フォーム入力の検証（SPEC §5.4 は w/h を u32 とする）", () => {
+  const form = { ...DEFAULT_FORM, format: "webp" };
+  const err = (f: Partial<typeof form>): string | null => {
+    const r = resolveOptions({ ...form, ...f });
+    return "error" in r ? r.error : null;
+  };
+
+  it("小数は弾く（丸めてから見ると 0.4 が 0 になって『指定したのに何も起きない』になる）", () => {
+    expect(err({ width: "0.4" })).toMatch(/整数/);
+    expect(err({ height: "10.5" })).toMatch(/整数/);
+  });
+
+  it("0 と負数と巨大値を弾く", () => {
+    expect(err({ width: "0" })).toMatch(/整数/);
+    expect(err({ width: "-5" })).toMatch(/整数/);
+    expect(err({ width: "1e12" })).toMatch(/整数/);
+  });
+
+  it("空欄は「指定なし」として通る", () => {
+    expect(err({ width: "", height: "" })).toBeNull();
+  });
+
+  it("正の整数は通る", () => {
+    const r = resolveOptions({ ...form, width: "300", height: "200" });
+    expect("error" in r).toBe(false);
+    if (!("error" in r)) expect(r.options).toMatchObject({ width: 300, height: 200 });
+  });
+
+  it("背景は生値のまま渡る（既定の解決は出力形式が確定する側でやる）", () => {
+    const r = resolveOptions({ ...form, background: "" });
+    if (!("error" in r)) expect(r.options.background).toBeNull();
+    const r2 = resolveOptions({ ...form, background: "#FF0000" });
+    if (!("error" in r2)) expect(r2.options.background).toBe("#ff0000");
+  });
+
+  it("3 桁の hex は実行前に弾く", () => {
+    expect(err({ background: "fff" })).toMatch(/16 進数/);
   });
 });

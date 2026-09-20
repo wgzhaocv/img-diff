@@ -8,11 +8,17 @@ import { ScreenHeader } from "@/components/ScreenHeader";
 import { ConvertOptions } from "@/components/ConvertOptions";
 import { formatBytes } from "@/lib/format";
 import { toast } from "sonner";
-import { pickDirectory, pickSaveFile, supportsFileSystemAccess, walkImages } from "@/lib/fsaccess";
+import {
+  isSameDirectory,
+  pickDirectory,
+  pickSaveFile,
+  supportsFileSystemAccess,
+  walkImages,
+} from "@/lib/fsaccess";
 import { downloadZipSink, folderSink, streamingZipSink } from "@/lib/convertSinks";
 import { isConvertibleImage, uniquePath } from "@/lib/imagePaths";
 import { errText } from "@/lib/format";
-import type { ConvertSource } from "@/lib/convert";
+import type { ConvertSink, ConvertSource } from "@/lib/convert";
 import { useConvertStore, type Destination } from "@/lib/stores/convertStore";
 
 // 変換画面（SPEC §5.4）。入力フォルダには一切書かず、出力は「別に選んだフォルダ」か zip。
@@ -36,6 +42,8 @@ export function ConvertScreen() {
     stats,
     setForm,
     setSources,
+    inputRoot,
+    setInputRoot,
     run,
     cancel,
     validate,
@@ -51,6 +59,7 @@ export function ConvertScreen() {
       const root = await pickDirectory("read");
       if (!root) return;
       const found = await walkImages(root, (name) => isConvertibleImage(name));
+      setInputRoot(root);
       setSources(
         found.map(
           (f): ConvertSource => ({
@@ -75,7 +84,7 @@ export function ConvertScreen() {
       toast.error(problem);
       return;
     }
-    let sink;
+    let sink: ConvertSink;
     if (form.destination === "folder") {
       // キャンセル（AbortError）は null、権限拒否などは投げる（両者を混ぜると誤診する）。
       const root = await pickDirectory("readwrite").catch((e: unknown) => {
@@ -83,21 +92,30 @@ export function ConvertScreen() {
         return null;
       });
       if (!root) return;
+      // **入力フォルダへは決して書かない**（SPEC §5.4 / 画面の約束）。同じ場所を選ばれたら断る。
+      // これが無いと、上書きを許可した状態で元画像が置き換わる。
+      if (inputRoot && (await isSameDirectory(inputRoot, root))) {
+        toast.error("出力先が入力フォルダと同じです", {
+          description: "元の画像を書き換えないため、別のフォルダを選んでください。",
+        });
+        return;
+      }
       sink = folderSink(root, form.overwrite);
     } else {
       // 保存先を取れるブラウザなら zip をディスクへ流す（峰値メモリが 1 枚分で済む）。
-      // 取れない（Firefox / Safari）ときだけメモリに組み立ててダウンロードへ退避する。
-      const writable = await pickSaveFile(ZIP_NAME).catch((e: unknown) => {
+      const pick = await pickSaveFile(ZIP_NAME).catch((e: unknown) => {
         toast.error("保存先を開けませんでした", { description: errText(e) });
-        return null;
+        return { kind: "cancelled" } as const;
       });
-      sink = writable ? streamingZipSink(writable) : downloadZipSink(ZIP_NAME);
+      if (pick.kind === "cancelled") return; // やめたなら変換もしない
+      sink = pick.kind === "stream" ? streamingZipSink(pick.writable) : downloadZipSink(ZIP_NAME); // 非対応ブラウザ（Firefox / Safari）だけメモリ経由
     }
     await run(sink);
   }
 
   function takeFiles(files: File[]): void {
     const imgs = files.filter((f) => isConvertibleImage(f.name));
+    setInputRoot(null); // File[] 経路には入力フォルダが無い。
     // ドロップの loose File は別フォルダの同名が衝突し得る。scan と同じく連番で取りこぼさない。
     const used = new Set<string>();
     setSources(

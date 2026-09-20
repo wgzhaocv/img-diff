@@ -34,7 +34,21 @@ const ALPHA_FORMATS = new Set(["png", "webp", "tiff"]);
  */
 export function effectiveBackground(bg: string | null | undefined, outFormat: string): string {
   if (bg != null && bg !== "") return bg.trim().toLowerCase();
-  return ALPHA_FORMATS.has(outFormat) ? BG_TRANSPARENT : "ffffff";
+  return ALPHA_FORMATS.has(normalizeOutFormat(outFormat)) ? BG_TRANSPARENT : "ffffff";
+}
+
+/**
+ * この 1 件が「何もしなくてよい」か（SPEC §5.4 規則 4）。
+ * 寸法指定が無く、出力形式も入力と同じなら**デコードせず元のバイト列をそのまま渡す**。
+ * 再符号化すると、何も変えていないのに圧縮とメタデータが変わりバイトが一致しなくなる
+ * （実測: 無変換の PNG が 889 → 922 バイト）。読めるが書けない形式（HEIC）もこれで素通りできる。
+ */
+export function isPassThrough(
+  o: { width: number | null; height: number | null; format: string | null },
+  srcFormat: string,
+): boolean {
+  if (o.width != null || o.height != null) return false;
+  return o.format == null || o.format === normalizeOutFormat(srcFormat);
 }
 
 /**

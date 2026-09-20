@@ -318,7 +318,12 @@ export interface ConvertOptions {
   height: number | null;
   fit: ConvertFit;
   gravity: ConvertGravity;
-  background: string;
+  /**
+   * `"transparent"` / `"average"` / 6 桁 hex。**`null` は「出力形式ごとの既定」**
+   * （png/webp/tiff は透明、それ以外は白）。出力形式が入力と同じ場合、実際の形式は
+   * ファイルごとに違うので、既定の解決は**変換する側が 1 件ずつ**行う。
+   */
+  background: string | null;
   /** 出力形式（別名正規化後）。入力と同じでよいなら null */
   format: string | null;
   /** 1..100。形式によっては無視される（gif / ppm） */

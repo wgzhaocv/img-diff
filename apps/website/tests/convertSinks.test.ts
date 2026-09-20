@@ -67,6 +67,29 @@ describe("streamingZipSink", () => {
     expect(zipEntries(w.bytes())).toEqual([]);
   });
 
+  it("**並列に put しても 1 件も落とさない**（runConvert は常に N 本から同時に呼ぶ）", async () => {
+    const w = fakeWritable();
+    const sink = streamingZipSink(w.stream);
+    // 単一スロット実装だと、後から来た put が前のを上書きして静かに消える。
+    const names = Array.from({ length: 24 }, (_, i) => `f${String(i).padStart(2, "0")}.webp`);
+    await Promise.all(names.map((n) => sink.put(n, bytesOf(n))));
+    await sink.finish?.();
+    expect(
+      zipEntries(w.bytes())
+        .map((e) => e.name)
+        .sort(),
+    ).toEqual([...names].sort());
+  });
+
+  it("abort すると中央ディレクトリを書かずに畳む", async () => {
+    const w = fakeWritable();
+    const sink = streamingZipSink(w.stream);
+    void sink.put("a.webp", bytesOf("x"));
+    await sink.abort?.(new Error("中断"));
+    // 中断した zip は完成していない（中央ディレクトリが無い）。
+    expect(zipEntries(w.bytes())).toEqual([]);
+  });
+
   it("put が終わる前に finish しても取りこぼさない", async () => {
     const w = fakeWritable();
     const sink = streamingZipSink(w.stream);

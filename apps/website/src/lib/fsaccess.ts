@@ -81,6 +81,20 @@ export async function pickDirectory(
   }
 }
 
+/// 2 つのディレクトリが同じ実体を指すか。**入力フォルダへ書き戻さないための検査**に使う
+/// （isSameEntry が無い環境では「同じかもしれない」側へ倒して true を返す＝ fail-closed）。
+export async function isSameDirectory(
+  a: FileSystemDirectoryHandle,
+  b: FileSystemDirectoryHandle,
+): Promise<boolean> {
+  if (!a.isSameEntry) return true;
+  try {
+    return await a.isSameEntry(b);
+  } catch {
+    return true;
+  }
+}
+
 /// dirHandle を roots に照合し、既存（isSameEntry）なら同じ rootId を返す。無ければ新規登録。
 export async function resolveRoot(dirHandle: FileSystemDirectoryHandle): Promise<RootEntry> {
   for (const r of await getRoots()) {
@@ -165,17 +179,21 @@ async function exists(dir: FileSystemDirectoryHandle, name: string): Promise<boo
   }
 }
 
+/// 保存先ファイルを選ばせた結果。**「非対応だから退避する」と「利用者がやめた」を混ぜない**
+/// （混ぜると、キャンセルしたのに変換が走ってダウンロードが始まる）。
+export type SavePick =
+  | { kind: "stream"; writable: FileSystemWritableFileStream }
+  | { kind: "unsupported" }
+  | { kind: "cancelled" };
+
 /// 保存先ファイルを選ばせる（**ユーザー操作内**で呼ぶ）。zip を流し込む先に使う。
-/// 非対応ブラウザ（Firefox / Safari）は null を返すので、呼び出し側がダウンロードへ退避する。
-export async function pickSaveFile(
-  suggestedName: string,
-): Promise<FileSystemWritableFileStream | null> {
-  if (!window.showSaveFilePicker) return null;
+export async function pickSaveFile(suggestedName: string): Promise<SavePick> {
+  if (!window.showSaveFilePicker) return { kind: "unsupported" };
   try {
     const handle = await window.showSaveFilePicker({ suggestedName });
-    return await handle.createWritable();
+    return { kind: "stream", writable: await handle.createWritable() };
   } catch (e) {
-    if (e instanceof DOMException && e.name === "AbortError") return null;
-    throw e;
+    if (e instanceof DOMException && e.name === "AbortError") return { kind: "cancelled" };
+    throw e; // 権限エラー等は呼び出し側へ（黙って退避すると原因が消える）
   }
 }

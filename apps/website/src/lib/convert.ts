@@ -7,7 +7,7 @@
 import type { ConvertItem, ConvertOptions, ConvertStats } from "schema";
 import type { ConvertResult } from "@/lib/hashTypes";
 import { PoolAbortError, type HashPool } from "@/lib/workerPool";
-import { normalizeOutFormat } from "@/lib/convertPlan";
+import { isPassThrough, normalizeOutFormat } from "@/lib/convertPlan";
 import { errText } from "@/lib/format";
 import { compareCodepoint, extOf } from "@/lib/imagePaths";
 
@@ -24,8 +24,14 @@ export type ConvertSource = {
 export type ConvertSink = {
   /** 1 件を受け取る。既に在って上書きしない場合は `"skipped"` を返す。 */
   put: (path: string, data: Uint8Array<ArrayBuffer>) => Promise<"written" | "skipped">;
-  /** 全件終わってからの締め（zip の生成など）。フォルダ書き出しでは何もしない。 */
+  /** 全件終わってからの締め（zip の中央ディレクトリ書き出しなど）。フォルダ書き出しでは何もしない。 */
   finish?: () => Promise<void>;
+  /**
+   * 中断・異常終了したときの後始末。**`finish` と排他**。
+   * これが無いと、流し込み中の zip が中央ディレクトリを書かないまま宙に浮き、
+   * 書き込み先のストリームも閉じられない。
+   */
+  abort?: (reason: unknown) => Promise<void>;
 };
 
 /** 出力ファイル名（拡張子を出力形式へ差し替える）。形式を変えないなら元の名前のまま。 */
@@ -83,46 +89,54 @@ export async function runConvert(
   const items: ConvertItem[] = [];
   let processed = 0;
 
-  // 同時実行数はプール本数に合わせる。狙いは並列度の制限ではなく**メモリ**
-  // （出力バッファは入力と同程度以上になり得るので、先読みしすぎない）。
-  await runBounded(sources, Math.max(1, poolSize), async (src) => {
-    const dst = outPathFor(src.path, options.format);
-    try {
-      const bytes = await src.bytes();
-      const res = (await pool.submit(
-        { op: "convert", path: src.path, bytes, options, srcFormat: extOf(src.path) },
-        [bytes],
-      )) as ConvertResult;
-      // ワーカーはエラーを戻り値で返す。ここで投げ直して失敗の出口を catch 1 つに束ねる。
-      if (res.error != null || !res.out) throw new Error(res.error ?? "変換に失敗しました");
-      const status = await sink.put(dst, res.out);
-      items.push({
-        src: src.path,
-        dst,
-        width: res.width,
-        height: res.height,
-        bytes: status === "written" ? res.out.byteLength : 0,
-        status: status === "written" ? "converted" : "skipped",
-      });
-    } catch (e) {
-      // **中断は「1 件の失敗」ではない。** 握り潰すと残り全部を failed として記録したまま
-      // 正常終了し、「中断したのに N 件変換・M 件失敗」と表示されてしまう。
-      if (e instanceof PoolAbortError) throw e;
-      items.push({
-        src: src.path,
-        dst,
-        width: 0,
-        height: 0,
-        bytes: 0,
-        status: "failed",
-        error: errText(e),
-      });
-    } finally {
-      onProgress({ processed: ++processed, total });
-    }
-  });
+  try {
+    // 同時実行数はプール本数に合わせる。狙いは並列度の制限ではなく**メモリ**
+    // （出力バッファは入力と同程度以上になり得るので、先読みしすぎない）。
+    await runBounded(sources, Math.max(1, poolSize), async (src) => {
+      const dst = outPathFor(src.path, options.format);
+      try {
+        const bytes = await src.bytes();
+        // この 1 件に変換の必要が無いなら**デコードせず元のバイト列を渡す**（SPEC §5.4 規則 4）。
+        // 再符号化すると何も変えていないのに圧縮とメタデータが変わる。混在バッチで
+        // 「既に目的の形式だったファイル」や、読めるが書けない HEIC がここを通る。
+        const out = isPassThrough(options, extOf(src.path))
+          ? // 寸法はデコードしないと分からないので 0（SPEC §5.4: 素通しした項目の約束）。
+            { data: new Uint8Array(bytes) as Uint8Array<ArrayBuffer>, width: 0, height: 0 }
+          : await convertOne(pool, src.path, bytes, options);
+        const status = await sink.put(dst, out.data);
+        items.push({
+          src: src.path,
+          dst,
+          width: out.width,
+          height: out.height,
+          bytes: status === "written" ? out.data.byteLength : 0,
+          status: status === "written" ? "converted" : "skipped",
+        });
+      } catch (e) {
+        // **中断は「1 件の失敗」ではない。** 握り潰すと残り全部を failed として記録したまま
+        // 正常終了し、「中断したのに N 件変換・M 件失敗」と表示されてしまう。
+        if (e instanceof PoolAbortError) throw e;
+        items.push({
+          src: src.path,
+          dst,
+          width: 0,
+          height: 0,
+          bytes: 0,
+          status: "failed",
+          error: errText(e),
+        });
+      } finally {
+        onProgress({ processed: ++processed, total });
+      }
+    });
+    await sink.finish?.();
+  } catch (e) {
+    // 中断でも編排の失敗でも、開きっぱなしの出力を必ず畳む
+    // （zip なら中央ディレクトリを書かないまま宙に浮かせない）。
+    await sink.abort?.(e);
+    throw e;
+  }
 
-  await sink.finish?.();
   items.sort(byPath);
   return {
     items,
@@ -134,6 +148,23 @@ export async function runConvert(
       elapsedMs: Math.round(performance.now() - started),
     },
   };
+}
+
+/** 出力バイト列と寸法。素通し（デコードしない）のときは寸法が 0。 */
+type Output = { data: Uint8Array<ArrayBuffer>; width: number; height: number };
+
+/** ワーカーへ 1 件投げる。エラーは戻り値で来るので投げ直して呼び出し側の catch に束ねる。 */
+async function convertOne(
+  pool: HashPool,
+  path: string,
+  bytes: ArrayBuffer,
+  options: ConvertOptions,
+): Promise<Output> {
+  const res = (await pool.submit({ op: "convert", path, bytes, options, srcFormat: extOf(path) }, [
+    bytes,
+  ])) as ConvertResult;
+  if (res.error != null || !res.out) throw new Error(res.error ?? "変換に失敗しました");
+  return { data: res.out, width: res.width, height: res.height };
 }
 
 /** 共有カーソルで N 本の runner を走らせる有界並列（scan.ts と同型）。 */

@@ -28,38 +28,68 @@ type ZipEntry = { name: string; input: Uint8Array<ArrayBuffer> };
  * 600 枚 × 2MB では +4.6GB まで膨らむ。しかも流した方が 17% 速い。
  */
 export function streamingZipSink(writable: FileSystemWritableFileStream): ConvertSink {
-  // put() が積み、ジェネレータが引く。client-zip が引くぶんだけ進むので背圧も効く。
-  const queue: ZipEntry[] = [];
-  let done = false;
-  let wake: (() => void) | null = null;
-  const nudge = (): void => {
-    wake?.();
-    wake = null;
+  // **各 put() は「自分の 1 件が client-zip に引き取られる」まで待つ。**
+  // これで変換側（runConvert の有界並列）へ背圧が伝わり、メモリ上界は同時実行数ぶんに収まる。
+  // 単一スロットにすると、並列に呼ばれた put が互いを上書きして**件を落とす**（runConvert は
+  // 常に N 本の runner から同時に呼ぶので、これは例外ではなく通常経路）。
+  const queue: { entry: ZipEntry; taken: () => void }[] = [];
+  let wantMore: (() => void) | null = null;
+  let closed = false;
+  let failure: unknown = null;
+
+  const signal = (): void => {
+    wantMore?.();
+    wantMore = null;
   };
 
   async function* entries(): AsyncGenerator<ZipEntry> {
     for (;;) {
-      if (queue.length > 0) {
-        yield queue.shift()!;
+      const next = queue.shift();
+      if (next) {
+        next.taken(); // その put() を解放（＝次の 1 件を作ってよい）
+        yield next.entry;
         continue;
       }
-      if (done) return;
-      await new Promise<void>((r) => (wake = r));
+      if (closed) return; // 残りを出し切ってから終わる
+      await new Promise<void>((r) => (wantMore = r));
     }
   }
 
-  const piped = makeZip(entries()).pipeTo(writable);
+  /** 書き込み先が死んだら、待っている put() を全部起こして理由を伝える。 */
+  const drainWaiters = (): void => {
+    for (const w of queue.splice(0)) w.taken();
+  };
+
+  const piped = makeZip(entries())
+    .pipeTo(writable)
+    .catch((e: unknown) => {
+      failure = e;
+      drainWaiters();
+    });
 
   return {
-    put: (path, data) => {
-      queue.push({ name: path, input: data });
-      nudge();
-      return Promise.resolve("written");
+    put: async (path, data) => {
+      if (failure) throw failure;
+      await new Promise<void>((resolve) => {
+        queue.push({ entry: { name: path, input: data }, taken: resolve });
+        signal();
+      });
+      if (failure) throw failure;
+      return "written";
     },
     finish: async () => {
-      done = true;
-      nudge();
+      closed = true;
+      signal();
       await piped;
+      if (failure) throw failure;
+    },
+    abort: async (reason) => {
+      // 中断時は中央ディレクトリを書かずにストリームごと畳む（半端な zip を残さない）。
+      closed = true;
+      drainWaiters();
+      signal();
+      await writable.abort?.(reason).catch(() => undefined);
+      await piped.catch(() => undefined);
     },
   };
 }
@@ -84,6 +114,11 @@ export function downloadZipSink(fileName: string): ConvertSink {
       a.download = fileName;
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 0);
+    },
+    // メモリに溜めているだけなので、捨てるだけでよい。
+    abort: () => {
+      entries.length = 0;
+      return Promise.resolve();
     },
   };
 }

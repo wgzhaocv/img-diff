@@ -7,6 +7,7 @@ import {
   BG_AVERAGE,
   BG_TRANSPARENT,
   backgroundVector,
+  effectiveBackground,
   normalizeOutFormat,
   parseHexRgb,
   planGeometry,
@@ -235,6 +236,7 @@ export function applyConvert(
     const loaded = keep(vips.Image.newFromBuffer(new Uint8Array(bytes)));
     let img = keep(loaded.autorot());
 
+    const outFormat = normalizeOutFormat(options.format ?? srcFormat);
     const plan = planGeometry({
       srcW: img.width,
       srcH: img.height,
@@ -255,7 +257,9 @@ export function applyConvert(
       );
     } else if (plan.kind === "contain") {
       const resized = plan.scale < 1 ? keep(img.resize(plan.scale)) : img;
-      const bg = backgroundFor(resized, options.background);
+      // **背景の既定は出力形式で決まる**（SPEC §5.4 規則 3）。形式が「入力と同じ」のときは
+      // 1 件ごとに違うので、ここで初めて解決する（入口で一律に決めると png の余白が白くなる）。
+      const bg = backgroundFor(resized, effectiveBackground(options.background, outFormat));
       const canvas = bg.needsAlpha ? keep(resized.addalpha()) : resized;
       img = keep(
         canvas.embed(plan.embed.x, plan.embed.y, plan.embed.width, plan.embed.height, {
@@ -265,8 +269,7 @@ export function applyConvert(
       );
     }
 
-    const format = normalizeOutFormat(options.format ?? srcFormat);
-    const spec = saveSpec(format, options.quality);
+    const spec = saveSpec(outFormat, options.quality);
     // TIFF だけ保存前に sRGB へ寄せる（参照実装 save_image.rs と同じ）。
     const target = spec.needsSrgb ? keep(img.colourspace("srgb")) : img;
     const out = new Uint8Array(target.writeToBuffer(spec.suffix, spec.options));

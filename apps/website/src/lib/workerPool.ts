@@ -85,7 +85,9 @@ export class HashPool {
   submit(req: WorkerRequest, transfer: Transferable[]): Promise<WorkerResponse> {
     return new Promise((resolve, reject) => {
       if (this.disposed) {
-        reject(new Error("プールは破棄済みです"));
+        // 破棄後の submit も**中断として**返す。ここを普通の Error にすると、
+        // 編排層が「1 件の失敗」と誤認して残りを走り続けてしまう。
+        reject(new PoolAbortError("プールは破棄済みです"));
         return;
       }
       this.queue.push({ req, transfer, resolve, reject });

@@ -1,6 +1,16 @@
 import { create } from "zustand";
 import { toast } from "sonner";
-import type { ConvertItem, ConvertOptions, ConvertStats } from "schema";
+import {
+  HASH_ALGO_VERSION,
+  SCHEMA_VERSION,
+  type ConvertItem,
+  type ConvertOptions,
+  type ConvertReport,
+  type ConvertStats,
+} from "schema";
+
+/** web の版（`ConvertReport.producer.appVersion`）。 */
+const APP_VERSION = "0.1.5";
 import {
   findOutputCollisions,
   runConvert,
@@ -8,9 +18,10 @@ import {
   type ConvertSink,
   type ConvertSource,
 } from "@/lib/convert";
-import { effectiveBackground, normalizeOutFormat, parseHexRgb } from "@/lib/convertPlan";
+import { isPassThrough, normalizeOutFormat, parseHexRgb } from "@/lib/convertPlan";
 import { defaultPoolSize, PoolAbortError, poolRef } from "@/lib/workerPool";
 import { errText } from "@/lib/format";
+import { extOf } from "@/lib/imagePaths";
 
 // convert 画面の状態ストア（zustand）。scanStore と同じ作法:
 // コンポーネント外に持つのでルート切替でも結果が残り、ワーカープールも暖まったまま使い回す。
@@ -75,14 +86,19 @@ export const DEFAULT_FORM: ConvertForm = {
 
 type ConvertState = {
   sources: ConvertSource[];
+  /** 入力がフォルダのときのその handle。**出力先が同じ場所でないことを確かめる**のに使う。 */
+  inputRoot: FileSystemDirectoryHandle | null;
   /** 画面に出す入力名（sources と同じ順）。 */
   form: ConvertForm;
   status: Status;
   progress: ConvertProgress;
   items: ConvertItem[];
   stats: ConvertStats | null;
+  /** SPEC §5.4 が定める出力の形。画面は items/stats を直接使うが、**契約はこれ**。 */
+  report: ConvertReport | null;
   setForm: (patch: Partial<ConvertForm>) => void;
   setSources: (sources: ConvertSource[]) => void;
+  setInputRoot: (root: FileSystemDirectoryHandle | null) => void;
   /**
    * 実行。**出力先（sink）は呼び出し側が先に用意して渡す。**
    * 出力フォルダの選択は `showDirectoryPicker` ＝ transient activation を要るので、
@@ -100,21 +116,30 @@ type ConvertState = {
 
 /** フォームの生値を解決済みの `ConvertOptions` にする。`null` は入力エラー（理由つき）。 */
 export function resolveOptions(form: ConvertForm): { options: ConvertOptions } | { error: string } {
-  const num = (s: string): number | null => {
-    if (s.trim() === "") return null;
-    const n = Number(s);
-    return Number.isFinite(n) && n > 0 ? Math.round(n) : Number.NaN;
+  // SPEC §5.4 は w/h を u32 としている。丸めてから判定すると `0.4` が 0 になって
+  // 「指定したのに何も起きない」になるので、**丸める前に整数性まで見る**。
+  const MAX_DIM = 0xff_ff_ff_ff;
+  const bad = (raw: string): boolean => {
+    if (raw.trim() === "") return false;
+    const n = Number(raw);
+    return !Number.isInteger(n) || n < 1 || n > MAX_DIM;
   };
+  if (bad(form.width) || bad(form.height)) {
+    return { error: "幅と高さは 1 以上の整数で指定してください。" };
+  }
+  const num = (raw: string): number | null => (raw.trim() === "" ? null : Number(raw));
   const width = num(form.width);
   const height = num(form.height);
-  if (Number.isNaN(width) || Number.isNaN(height)) {
-    return { error: "幅と高さは 1 以上の数値で指定してください。" };
-  }
   const format = form.format.trim() === "" ? null : normalizeOutFormat(form.format);
-  const background = effectiveBackground(form.background, format ?? "");
+  // **背景は生値のまま渡す。** 既定は出力形式で決まり、形式が「入力と同じ」のときは
+  // 1 件ごとに違うので、解決はワーカー側（実際の出力形式が確定する場所）で行う。
+  const raw = form.background.trim().toLowerCase();
+  const background = raw === "" ? null : raw;
   // hex を指定したなら実行前に弾く（変換の途中で 1 枚ずつ失敗させない）。
-  if (background !== "transparent" && background !== "average" && !parseHexRgb(background)) {
-    return { error: `背景色は 6 桁の 16 進数で指定してください（例 ffffff）: ${background}` };
+  if (background != null && background !== "transparent" && background !== "average") {
+    if (!parseHexRgb(background)) {
+      return { error: `背景色は 6 桁の 16 進数で指定してください（例 ffffff）: ${background}` };
+    }
   }
   return {
     options: {
@@ -131,15 +156,19 @@ export function resolveOptions(form: ConvertForm): { options: ConvertOptions } |
 
 export const useConvertStore = create<ConvertState>((set, get) => ({
   sources: [],
+  inputRoot: null,
   form: DEFAULT_FORM,
   status: "idle",
   progress: { processed: 0, total: 0 },
   items: [],
   stats: null,
+  report: null,
 
   setForm: (patch) => set((s) => ({ form: { ...s.form, ...patch } })),
-  setSources: (sources) => set({ sources, items: [], stats: null, status: "idle" }),
-  reset: () => set({ sources: [], items: [], stats: null, status: "idle" }),
+  setSources: (sources) => set({ sources, items: [], stats: null, report: null, status: "idle" }),
+  setInputRoot: (inputRoot) => set({ inputRoot }),
+  reset: () =>
+    set({ sources: [], inputRoot: null, items: [], stats: null, report: null, status: "idle" }),
 
   cancel: () => {
     // 走行中・待機中の submit がまとめて reject され、run 側の catch が idle へ戻す。
@@ -151,6 +180,10 @@ export const useConvertStore = create<ConvertState>((set, get) => ({
     if (sources.length === 0) return "変換する画像がありません。";
     const resolved = resolveOptions(form);
     if ("error" in resolved) return resolved.error;
+    // 全件が素通しなら、やることが無い（形式も寸法も指定していない）。
+    if (sources.every((s) => isPassThrough(resolved.options, extOf(s.path)))) {
+      return "変換する指定がありません（寸法か出力形式を指定してください）。";
+    }
     // 同じ実行の中で出力名が衝突するなら**始める前に**止める（途中で 1 枚ずつ失敗させない）。
     const collisions = findOutputCollisions(sources, resolved.options.format);
     if (collisions.length > 0) {
@@ -186,7 +219,27 @@ export const useConvertStore = create<ConvertState>((set, get) => ({
         POOL_SIZE,
         rafThrottle<ConvertProgress>((progress) => set({ progress })),
       );
-      set({ items, stats, status: "done" });
+      set({
+        items,
+        stats,
+        // SPEC §5.4 の出力契約を実体として組み立てる（適用した設定の記録も兼ねる）。
+        report: {
+          schemaVersion: SCHEMA_VERSION,
+          kind: "convert",
+          producer: {
+            app: "web",
+            appVersion: APP_VERSION,
+            vips: "wasm-vips",
+            hashAlgo: HASH_ALGO_VERSION,
+          },
+          root: get().inputRoot?.name ?? "",
+          createdAt: new Date().toISOString(),
+          options: resolved.options,
+          items,
+          stats,
+        },
+        status: "done",
+      });
       if (stats.failed > 0) {
         toast.warning(
           `${stats.converted} 件を変換（${stats.failed} 件失敗・${stats.skipped} 件 skip）`,

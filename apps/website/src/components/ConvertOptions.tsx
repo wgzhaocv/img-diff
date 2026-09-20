@@ -175,7 +175,9 @@ export const ConvertOptions = memo(function ConvertOptions({ disabled }: { disab
             value={[form.quality]}
             onValueChange={([v]) => set("quality", v ?? DEFAULT_FORM.quality)}
           />
-          <p className="text-sm text-muted-foreground">png・gif・ppm では無視されます。</p>
+          <p className="text-sm text-muted-foreground">
+            jpg・webp・avif・jxl でのみ効きます（png・tiff・gif・ppm では無視されます）。
+          </p>
         </div>
       </fieldset>
     </div>
