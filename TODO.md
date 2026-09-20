@@ -41,12 +41,12 @@
   - **繰延べ**: fontconfig の設定パス（`/opt/homebrew/etc/fonts`）は同梱していないので、
     `render` で**文字入り SVG** を描くとフォントが代替される。scan/compare/HEIC には影響なし。
 - **リリース済み**: [v0.1.6](https://github.com/wgzhaocv/img-diff/releases/tag/v0.1.6) を **pre-release** で公開
-  （v0.1.5 も pre-release のまま残してある。差分は「存在しないフォルダを scan/clean/find が
-  `not_found` で断る」修正のみ）
-  （資産 = mac zip + `manifest.json` + `manifest-aarch64-apple-darwin.json`）。web も本番反映済み
-  （version `d6d87e71`）。**`releases/latest` は v0.1.4 のまま**＝ Windows の導入と自己更新は無傷
-  （API で確認済み）。実機で `curl | bash` → scan（HEIC/AVIF/JXL）→ `update`（「すでに最新です」）→
-  再実行の冪等まで通した。
+  （資産 = mac zip + `manifest.json` + `manifest-aarch64-apple-darwin.json`）。v0.1.5 も pre-release の
+  まま残してある（差分は「存在しないフォルダを scan/clean/find が `not_found` で断る」修正のみ）。
+  web も Polaris へ本番反映済み（`polar static deploy`。19 ファイル / public / `anon_seq` 11）。
+  **`releases/latest` は v0.1.4 のまま**＝ Windows の導入と自己更新は無傷（API で確認済み）。
+  実機で `curl | bash`（素の環境と既存上書きの両方）→ `--version` 0.1.6 → scan（HEIC/AVIF/JXL）→
+  `not_found` の確認まで通した。束の中の libvips が 1 つだけであることも `DYLD_PRINT_LIBRARIES` で再確認。
 
 - **▶ 次にやる収尾（Windows 機で。この順に）**:
   1. `bash scripts/package-windows.sh` → `target/win-package/` に zip と `manifest-x86_64-pc-windows-gnu.json`
