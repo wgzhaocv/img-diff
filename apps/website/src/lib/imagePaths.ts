@@ -48,6 +48,11 @@ export function extOf(path: string): string {
   return dot > slash ? path.slice(dot + 1).toLowerCase() : "";
 }
 
+/** 表示用のファイル名（最後の `/` より後ろ）。path 自体は title / alt に使う。 */
+export function baseNameOf(path: string): string {
+  return path.slice(path.lastIndexOf("/") + 1);
+}
+
 /** scan の対象か（CLI の既定 ext と同じ集合）。 */
 export function isScannableImage(name: string): boolean {
   return SCANNABLE_EXTS.has(extOf(name));

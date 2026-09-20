@@ -97,14 +97,7 @@ export async function runConvert(
     await runBounded(sources, Math.max(1, poolSize), async (src) => {
       const dst = outPathFor(src.path, options.format);
       try {
-        const bytes = await src.bytes();
-        // この 1 件に変換の必要が無いなら**デコードせず元のバイト列を渡す**（SPEC §5.4 規則 4）。
-        // 再符号化すると何も変えていないのに圧縮とメタデータが変わる。混在バッチで
-        // 「既に目的の形式だったファイル」や、読めるが書けない HEIC がここを通る。
-        const out = isPassThrough(options, extOf(src.path))
-          ? // 寸法はデコードしないと分からないので 0（SPEC §5.4: 素通しした項目の約束）。
-            { data: new Uint8Array(bytes) as Uint8Array<ArrayBuffer>, width: 0, height: 0 }
-          : await convertOne(pool, src.path, bytes, options);
+        const out = await convertSource(src, options, pool);
         if (out.vipsVersion) vipsVersion = out.vipsVersion;
         const status = await sink.put(dst, out.data);
         items.push({
@@ -155,12 +148,40 @@ export async function runConvert(
 }
 
 /** 出力バイト列と寸法。素通し（デコードしない）のときは寸法が 0。 */
-type Output = {
+export type Output = {
   data: Uint8Array<ArrayBuffer>;
   width: number;
   height: number;
   vipsVersion?: string;
+  /** 元のバイト列をそのまま返した（再符号化していない）か。SPEC §5.4 規則 4。 */
+  passedThrough: boolean;
 };
+
+/**
+ * **1 件を変換する唯一の入口。** 本番の一括変換とプレビューが同じ物を通る
+ * （別々に書くと「プレビューでは起きない失敗」「プレビューだけ違う結果」が生まれる）。
+ *
+ * この 1 件に変換の必要が無いなら**デコードせず元のバイト列を返す**（SPEC §5.4 規則 4）。
+ * 再符号化すると何も変えていないのに圧縮とメタデータが変わる。混在バッチで
+ * 「既に目的の形式だったファイル」や、読めるが書けない HEIC がここを通る。
+ */
+export async function convertSource(
+  src: ConvertSource,
+  options: ConvertOptions,
+  pool: HashPool,
+): Promise<Output> {
+  const bytes = await src.bytes();
+  if (isPassThrough(options, extOf(src.path))) {
+    // 寸法はデコードしないと分からないので 0（SPEC §5.4: 素通しした項目の約束）。
+    return {
+      data: new Uint8Array(bytes) as Uint8Array<ArrayBuffer>,
+      width: 0,
+      height: 0,
+      passedThrough: true,
+    };
+  }
+  return convertOne(pool, src.path, bytes, options);
+}
 
 /** ワーカーへ 1 件投げる。エラーは戻り値で来るので投げ直して呼び出し側の catch に束ねる。 */
 async function convertOne(
@@ -173,11 +194,22 @@ async function convertOne(
     bytes,
   ])) as ConvertResult;
   if (res.error != null || !res.out) throw new Error(res.error ?? "変換に失敗しました");
-  return { data: res.out, width: res.width, height: res.height, vipsVersion: res.vipsVersion };
+  return {
+    data: res.out,
+    width: res.width,
+    height: res.height,
+    vipsVersion: res.vipsVersion,
+    // ワーカー側でも素通しは起こる（寸法を指定しても、その画像には効かないとき）。
+    passedThrough: res.passedThrough ?? false,
+  };
 }
 
-/** 共有カーソルで N 本の runner を走らせる有界並列（scan.ts と同型）。 */
-async function runBounded<T>(
+/**
+ * 共有カーソルで N 本の runner を走らせる有界並列（scan.ts と同型）。
+ * 変換本体のほか、**サムネの先読み**（convertStore）でも使う —— 狙いは並列度ではなく
+ * メモリで、`items` の要素ごとにファイル全体を読むので先読みしすぎないこと自体が目的。
+ */
+export async function runBounded<T>(
   items: T[],
   limit: number,
   task: (item: T) => Promise<void>,

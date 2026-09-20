@@ -1,12 +1,13 @@
 /// <reference lib="webworker" />
 import init, { flatten_and_dhash, flatten_on_white } from "@/wasm/imgdiff_wasm";
 import wasmUrl from "@/wasm/imgdiff_wasm_bg.wasm?url";
-import { convertBuffer, decodeCanonical } from "./vips";
+import { convertBuffer, decodeCanonical, imageInfo } from "./vips";
 import { errText } from "@/lib/format";
 import type {
   ConvertResult,
   DecodeResult,
   HashResult,
+  InfoResult,
   PixelResult,
   WorkerRequest,
   WorkerResponse,
@@ -140,6 +141,7 @@ async function convertOne(req: Extract<WorkerRequest, { op: "convert" }>): Promi
       width: r.width,
       height: r.height,
       vipsVersion: r.vipsVersion,
+      passedThrough: r.passedThrough ?? false,
     };
   } catch (e) {
     // 1 件の失敗で全体を止めない（SPEC §5.4）。他の op と同じくエラーは戻り値で返す。
@@ -153,6 +155,18 @@ async function convertOne(req: Extract<WorkerRequest, { op: "convert" }>): Promi
   }
 }
 
+/// 表示用の情報だけを返す（原寸 + サムネ）。ハッシュも全分解能 RGBA も作らない。
+async function infoOne(req: { path: string; bytes: ArrayBuffer }): Promise<InfoResult> {
+  const bytes = req.bytes.byteLength;
+  try {
+    const { width, height, thumb } = await imageInfo(req.bytes);
+    return { op: "info", path: req.path, width, height, bytes, thumb };
+  } catch (e) {
+    // 画素をデコードできない（web の HEVC な HEIC など）。呼び出し側は「読み込めません」と出す。
+    return { op: "info", path: req.path, width: 0, height: 0, bytes, error: errText(e) };
+  }
+}
+
 /// 非 SAB な独立バッファ（rgba / thumb / out）は transfer してコピーを避ける。
 function transfersOf(res: WorkerResponse): Transferable[] {
   const t: Transferable[] = [];
@@ -161,6 +175,7 @@ function transfersOf(res: WorkerResponse): Transferable[] {
     if (res.rgba) t.push(res.rgba.buffer);
     if (res.thumb) t.push(res.thumb.buffer);
   }
+  if (res.op === "info" && res.thumb) t.push(res.thumb.buffer);
   if (res.op === "convert" && res.out) t.push(res.out.buffer);
   return t;
 }
@@ -171,21 +186,23 @@ self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
   const res =
     req.op === "convert"
       ? await convertOne(req)
-      : req.op === "pixel"
-        ? await pixelOne(req)
-        : req.op === "decode"
-          ? await decodeOne(req)
-          : req.op === "hash"
-            ? await hashOne(req)
-            : ({
-                op: "hash",
-                path: (req as { path: string }).path,
-                sha256: "",
-                phash: null,
-                width: 0,
-                height: 0,
-                bytes: 0,
-                error: `未知の op: ${String((req as { op: string }).op)}`,
-              } satisfies HashResult);
+      : req.op === "info"
+        ? await infoOne(req)
+        : req.op === "pixel"
+          ? await pixelOne(req)
+          : req.op === "decode"
+            ? await decodeOne(req)
+            : req.op === "hash"
+              ? await hashOne(req)
+              : ({
+                  op: "hash",
+                  path: (req as { path: string }).path,
+                  sha256: "",
+                  phash: null,
+                  width: 0,
+                  height: 0,
+                  bytes: 0,
+                  error: `未知の op: ${String((req as { op: string }).op)}`,
+                } satisfies HashResult);
   self.postMessage(res, transfersOf(res));
 };

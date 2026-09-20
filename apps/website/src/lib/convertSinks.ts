@@ -5,7 +5,8 @@
 
 import { makeZip } from "client-zip";
 import type { ConvertSink } from "@/lib/convert";
-import { writeFileAt } from "@/lib/fsaccess";
+import { isInsideDirectory, pickDirectory, pickSaveFile, writeFileAt } from "@/lib/fsaccess";
+import { errText } from "@/lib/format";
 
 /**
  * 選んだ出力フォルダへ書く。入力ルートからの相対構造を保ち、
@@ -127,4 +128,68 @@ export function downloadZipSink(fileName: string): ConvertSink {
       return Promise.resolve();
     },
   };
+}
+
+/** 出力先を決めた結果。`error` は利用者に見せる文言、`cancelled` は黙って何もしない。 */
+export type SinkChoice =
+  | { kind: "sink"; sink: ConvertSink }
+  | { kind: "cancelled" }
+  | { kind: "error"; title: string; description?: string };
+
+/**
+ * 設定から出力先を用意する。**元データを壊さないための判断もここに集める**
+ * （画面には「聞く・知らせる」だけを残す）。
+ *
+ * **呼ぶ側は click ハンドラの同期 continuation で呼ぶこと。** `showDirectoryPicker` /
+ * `showSaveFilePicker` は transient activation を要るので、先に await してからでは手遅れになる。
+ */
+export async function resolveSink(
+  form: { destination: "folder" | "zip"; overwrite: boolean },
+  inputRoot: FileSystemDirectoryHandle | null,
+  zipName: string,
+): Promise<SinkChoice> {
+  if (form.destination === "zip") {
+    // 保存先を取れるブラウザなら zip をディスクへ流す（峰値メモリが 1 枚分で済む）。
+    try {
+      const pick = await pickSaveFile(zipName);
+      if (pick.kind === "cancelled") return { kind: "cancelled" }; // やめたなら変換もしない
+      // 非対応ブラウザ（Firefox / Safari）だけメモリ経由。
+      return {
+        kind: "sink",
+        sink: pick.kind === "stream" ? streamingZipSink(pick.writable) : downloadZipSink(zipName),
+      };
+    } catch (e) {
+      return { kind: "error", title: "保存先を開けませんでした", description: errText(e) };
+    }
+  }
+
+  let root: FileSystemDirectoryHandle | null;
+  try {
+    // キャンセル（AbortError）は null、権限拒否などは投げる（両者を混ぜると誤診する）。
+    root = await pickDirectory("readwrite");
+  } catch (e) {
+    return { kind: "error", title: "出力先フォルダを開けませんでした", description: errText(e) };
+  }
+  if (!root) return { kind: "cancelled" };
+
+  // **入力フォルダ（とその配下）へは決して書かない**（SPEC §5.4 / 画面の約束）。
+  // これが無いと、上書きを許可した状態で元画像が置き換わる。
+  if (inputRoot && (await isInsideDirectory(inputRoot, root))) {
+    return {
+      kind: "error",
+      title: "出力先が入力フォルダの中です",
+      description: "元の画像を書き換えないため、入力とは別のフォルダを選んでください。",
+    };
+  }
+  // ドロップで受けた File[] には入力フォルダの handle が無く、**出力先と重ならないことを
+  // 確かめる手段が無い**。上書きを許すと元画像を潰し得るので、この経路では上書きを認めない。
+  if (!inputRoot && form.overwrite) {
+    return {
+      kind: "error",
+      title: "この入力方法では上書きできません",
+      description:
+        "ドラッグで受け取った画像は元の場所を確認できないため、上書きを外すか、フォルダを選び直してください。",
+    };
+  }
+  return { kind: "sink", sink: folderSink(root, form.overwrite) };
 }

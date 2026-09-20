@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { createJSONStorage, persist } from "zustand/middleware";
 import { toast } from "sonner";
 import {
   HASH_ALGO_VERSION,
@@ -12,13 +13,24 @@ import {
 /** web の版（`ConvertReport.producer.appVersion`）。 */
 const APP_VERSION = "0.1.6";
 import {
+  convertSource,
   findOutputCollisions,
+  runBounded,
   runConvert,
   type ConvertProgress,
   type ConvertSink,
   type ConvertSource,
 } from "@/lib/convert";
-import { isPassThrough, normalizeOutFormat, parseHexRgb } from "@/lib/convertPlan";
+import { FIT_VALUES, GRAVITY_VALUES, mimeOf, WRITABLE_FORMATS } from "@/lib/convertControls";
+import type { ConvertResult, InfoResult } from "@/lib/hashTypes";
+import {
+  clampQuality,
+  isBadDim,
+  isPassThrough,
+  normalizeOutFormat,
+  parseDim,
+  parseHexRgb,
+} from "@/lib/convertPlan";
 import { defaultPoolSize, PoolAbortError, poolRef } from "@/lib/workerPool";
 import { errText } from "@/lib/format";
 import { extOf } from "@/lib/imagePaths";
@@ -90,7 +102,126 @@ export const DEFAULT_FORM: ConvertForm = {
   overwrite: false,
 };
 
-type ConvertState = {
+/**
+ * **次に開いたときも残す設定**と、その検証。
+ *
+ * 表を 1 つにする —— 残す鍵の一覧と、戻すときの検証を別々に書くと、
+ * 欄を足したときに片方だけ古くなる（保存はされるのに黙って捨てられる、が起きる）。
+ *
+ * 入れていない物には理由がある:
+ * - `width` / `height`: 画像に付随する値。毎回その画像の原寸から始める
+ *   （前回の 1280 が今回の画像にとって意味を持つとは限らない）。
+ * - `overwrite`: 破壊的になり得る切替は既定を安全側に戻す（UI.md §6.1）。
+ *
+ * `quality` と `qualityTouched` は**対で**残す（片方だけ戻ると、画質が復活したのに
+ * 再符号化されない＝黙って無視される状態になる）。
+ */
+const REMEMBERED: {
+  [K in keyof RememberedForm]: (v: unknown) => RememberedForm[K] | undefined;
+} = {
+  fit: (v) =>
+    typeof v === "string" && (FIT_VALUES as string[]).includes(v)
+      ? (v as ConvertForm["fit"])
+      : undefined,
+  gravity: (v) =>
+    typeof v === "string" && (GRAVITY_VALUES as string[]).includes(v)
+      ? (v as ConvertForm["gravity"])
+      : undefined,
+  // 背景は自由入力（transparent / average / hex）。実行前に resolveOptions が弾くので、
+  // ここでは「文字列で、UI が壊れない長さ」だけ見る。
+  background: (v) => (typeof v === "string" && v.length <= 32 ? v : undefined),
+  format: (v) =>
+    typeof v === "string" && (v === "" || WRITABLE_FORMATS.includes(v)) ? v : undefined,
+  quality: (v) => (typeof v === "number" ? clampQuality(v) : undefined),
+  qualityTouched: (v) => (typeof v === "boolean" ? v : undefined),
+  destination: (v) => (v === "folder" || v === "zip" ? v : undefined),
+};
+
+/** 記憶する部分だけの形。ここに欄を足すと `REMEMBERED` の検証も必須になる（型で強制される）。 */
+export type RememberedForm = Omit<ConvertForm, "width" | "height" | "overwrite">;
+
+/** 保存する値を取り出す。 */
+export function rememberedForm(form: ConvertForm): RememberedForm {
+  const out = {} as Record<string, unknown>;
+  for (const key of Object.keys(REMEMBERED)) out[key] = form[key as keyof ConvertForm];
+  return out as RememberedForm;
+}
+
+/**
+ * localStorage から戻した値を検証する。**手で書き換えられていても画面を壊さない**ため、
+ * 表に在る鍵だけを、取り得る値まで見て通す（未知・不正は既定のまま）。
+ */
+export function sanitizeStoredForm(raw: unknown): Partial<ConvertForm> {
+  if (typeof raw !== "object" || raw === null) return {};
+  const r = raw as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const [key, check] of Object.entries(REMEMBERED)) {
+    const v = check(r[key]);
+    if (v !== undefined) out[key] = v;
+  }
+  // **対でなければどちらも捨てる。** 片方だけ戻ると「画質 20 と表示されているのに
+  // 素通しして効かない」「既定値で黙って再符号化する」という食い違いになる。
+  if ("quality" in out !== "qualityTouched" in out) {
+    delete out.quality;
+    delete out.qualityTouched;
+  }
+  return out as Partial<ConvertForm>;
+}
+
+/** 入力 1 件の見た目の情報（サムネ・原寸・バイト数）。worker の `op:"hash"` が一度に返す。 */
+export type SourceInfo = {
+  /** ~256px の webp。デコードできなかったときは無し。 */
+  thumb?: Blob;
+  /** 原寸（EXIF の向き適用後）。デコードできなかったときは 0。 */
+  width: number;
+  height: number;
+  bytes: number;
+};
+
+/** サムネを一度に取りに行く件数。「もっと見る」でこの単位ずつ伸びる。 */
+export const SOURCE_INFO_PAGE = 12;
+
+/**
+ * サムネ取得が飛んでいる path。**選び直しと二重起動で同じ画像を二度デコードしない**ため。
+ * 描画に関係しないのでストア外に置く（`running` と同じ扱い）。
+ */
+const infoInflight = new Set<string>();
+/**
+ * 選び直しの世代。**古い選択の結果が新しい選択へ紛れ込むのを防ぐ**。
+ * サムネもプレビューもこの 1 本を見る（プレビューは同時に 1 本しか走らないので、
+ * 「設定を変えたから古い結果を捨てる」用の別カウンタは要らない）。
+ */
+let sourcesGen = 0;
+/**
+ * プレビューは**常に 1 枚だけ**走らせる。走行中の要求は「最後の 1 回」だけ覚えておき、
+ * 終わってからやり直す（スライダを掴んで動かしても、変換が積み上がらない）。
+ * 画面に関係しないのでストア外に置く（`running` と同じ扱い）。
+ */
+let previewBusy = false;
+let previewQueued = false;
+/** 原寸の自動流し込みを済ませた世代（選び直しごとに一度だけ行う）。 */
+let prefilledGen = -1;
+
+/** プレビュー 1 枚ぶんの結果（実際に変換して得たもの。推定値ではない）。 */
+export type PreviewResult = {
+  path: string;
+  /** 変換後のバイト列。ブラウザが描けない形式（jxl / tiff / ppm）でも数値は正しい。 */
+  blob: Blob;
+  width: number;
+  height: number;
+  bytes: number;
+  /** 実際の出力形式（正規化済み）。 */
+  format: string;
+  /** 再符号化せず元のバイト列をそのまま出した（SPEC §5.4 規則 4）。 */
+  passedThrough: boolean;
+  /**
+   * どの入力から作ったか（`previewKey`）。**path だけで突き合わせると、
+   * 設定を変えた直後や失敗したときに古い絵を「今の結果」として保存・コピーできてしまう。**
+   */
+  key: string;
+};
+
+export type ConvertState = {
   sources: ConvertSource[];
   /** 入力がフォルダのときのその handle。**出力先が同じ場所でないことを確かめる**のに使う。 */
   inputRoot: FileSystemDirectoryHandle | null;
@@ -102,47 +233,104 @@ type ConvertState = {
   stats: ConvertStats | null;
   /** SPEC §5.4 が定める出力の形。画面は items/stats を直接使うが、**契約はこれ**。 */
   report: ConvertReport | null;
+  /** 取得できた入力の見た目情報（path → サムネ・原寸）。先頭から `infoLimit` 件ぶん。 */
+  sourceInfo: Map<string, SourceInfo>;
+  /** サムネを取りに行った件数（先頭から）。 */
+  infoLimit: number;
+  /** プレビューに使う 1 枚（未指定なら先頭）。サムネを押すと変わる。 */
+  previewPath: string | null;
+  /** 直近のプレビュー結果。設定を変えるたびに作り直す。 */
+  preview: PreviewResult | null;
+  /** プレビューを作っている最中か（結果は `preview`、失敗は `previewError`）。 */
+  previewRendering: boolean;
+  previewError: string | null;
+  setPreviewPath: (path: string | null) => void;
   setForm: (patch: Partial<ConvertForm>) => void;
   setSources: (sources: ConvertSource[]) => void;
   setInputRoot: (root: FileSystemDirectoryHandle | null) => void;
   /**
+   * 先頭 `upTo` 件のサムネと原寸を取る。**表示する分しか取らない**
+   * （数千枚のフォルダで全件デコードしないため）。先頭 1 枚が返った時点で寸法欄に原寸を入れる。
+   */
+  loadSourceInfo: (upTo: number) => Promise<void>;
+  /**
    * 実行。**出力先（sink）は呼び出し側が先に用意して渡す。**
    * 出力フォルダの選択は `showDirectoryPicker` ＝ transient activation を要るので、
    * ここで await したら手遅れ。ブラウザが実際に強制する場所（click ハンドラ）で解決させ、
-   * このストアは「隠れた前提を持たない純粋な非同期編排」に保つ
-   * （`DeleteDuplicatesButton` が `requestWritePermission` に対して取っているのと同じ形）。
+   * このストアは「隠れた前提を持たない純粋な非同期編排」に保つ。
+   *
+   * **`options` は押した瞬間の値**を渡すこと。出力先を選んでいる間にフォームが動くことがある
+   * （サムネの到着で寸法が入る等）ので、ここで読み直すと「押したときと違う変換」になる。
    */
-  run: (sink: ConvertSink) => Promise<void>;
-  /** 実行前の検査。エラー文言を返したら実行しない。 */
+  run: (sink: ConvertSink, options: ConvertOptions) => Promise<void>;
+  /**
+   * 今の設定で**実際に 1 枚だけ変換して**プレビューを作る（推定ではなく本物を見せる）。
+   * 変換の実行中は何もしない —— 同じプールを奪い合わないため。
+   */
+  renderPreview: () => Promise<void>;
+  /**
+   * プレビューの結果を**クリップボードが受け取れる形（png）**で返す。
+   *
+   * ブラウザのクリップボードは画像として png しか受け取らない（jpeg / webp を渡すと
+   * `Type ... not supported on write` で失敗する）。貼り付け先が欲しいのは「絵」であって
+   * ファイル形式ではないので、**png 以外は見えている結果をそのまま png へ包み直す**
+   * （寸法も画素も変えない）。
+   */
+  previewAsPng: () => Promise<Blob>;
+  /** 実行前の検査（安い側）。エラー文言を返したら実行しない。 */
   validate: () => string | null;
+  /**
+   * 出力名の衝突検査（**全件を舐める**）。`sources` と出力形式でしか変わらないので
+   * `validate` と分けてある —— 文字を 1 つ打つたびに数千件を再走査しないため。
+   */
+  validateCollisions: () => string | null;
   /** 中断。プールを破棄して作り直す。 */
   cancel: () => void;
   reset: () => void;
 };
 
+/**
+ * プレビューと原寸の基準にする 1 枚（サムネで選べる。未選択なら先頭）。
+ * **3 つの画面部品が同じ 1 枚を指す**必要があるので、選び方はここに 1 つだけ置く。
+ */
+export const representativePath = (s: ConvertState): string | undefined =>
+  s.previewPath ?? s.sources[0]?.path;
+
+/**
+ * **プレビューを作り直すべき入力**の同一性。これが変わらなければ結果は 1 バイトも変わらない。
+ *
+ * `form` 全体を見張ると、出力に関係しない欄（保存先・上書き）を触っただけで
+ * 4000×3000 の再変換が走る。実際に効くのは「代表 1 枚」と「解決済みの `ConvertOptions`」だけ。
+ */
+export function previewKey(s: ConvertState): string {
+  const path = representativePath(s) ?? "";
+  const resolved = resolveOptions(s.form);
+  return "error" in resolved ? `invalid:${path}` : `${path}\n${JSON.stringify(resolved.options)}`;
+}
+
 /** フォームの生値を解決済みの `ConvertOptions` にする。`null` は入力エラー（理由つき）。 */
 export function resolveOptions(form: ConvertForm): { options: ConvertOptions } | { error: string } {
-  // SPEC §5.4 は w/h を u32 としている。丸めてから判定すると `0.4` が 0 になって
-  // 「指定したのに何も起きない」になるので、**丸める前に整数性まで見る**。
-  const MAX_DIM = 0xff_ff_ff_ff;
-  const bad = (raw: string): boolean => {
-    if (raw.trim() === "") return false;
-    const n = Number(raw);
-    return !Number.isInteger(n) || n < 1 || n > MAX_DIM;
-  };
-  if (bad(form.width) || bad(form.height)) {
+  // 読み取りの規則は convertPlan（parseDim）が正本。画面の表示判定と同じ物を使う。
+  if (isBadDim(form.width) || isBadDim(form.height)) {
     return { error: "幅と高さは 1 以上の整数で指定してください。" };
   }
-  const num = (raw: string): number | null => (raw.trim() === "" ? null : Number(raw));
-  const width = num(form.width);
-  const height = num(form.height);
+  const width = parseDim(form.width);
+  const height = parseDim(form.height);
   const format = form.format.trim() === "" ? null : normalizeOutFormat(form.format);
   // **背景は生値のまま渡す。** 既定は出力形式で決まり、形式が「入力と同じ」のときは
   // 1 件ごとに違うので、解決はワーカー側（実際の出力形式が確定する場所）で行う。
   const raw = form.background.trim().toLowerCase();
   const background = raw === "" ? null : raw;
   // hex を指定したなら実行前に弾く（変換の途中で 1 枚ずつ失敗させない）。
-  if (background != null && background !== "transparent" && background !== "average") {
+  // **使われるときだけ**見る —— 背景は contain の余白にしか使わないので、cover に切り替えた
+  // 利用者が「もう見えない欄の打ち間違い」で実行を止められるのはおかしい。
+  const backgroundUsed = form.fit === "contain" && width != null && height != null;
+  if (
+    backgroundUsed &&
+    background != null &&
+    background !== "transparent" &&
+    background !== "average"
+  ) {
     if (!parseHexRgb(background)) {
       return { error: `背景色は 6 桁の 16 進数で指定してください（例 ffffff）: ${background}` };
     }
@@ -162,115 +350,359 @@ export function resolveOptions(form: ConvertForm): { options: ConvertOptions } |
   };
 }
 
-export const useConvertStore = create<ConvertState>((set, get) => ({
-  sources: [],
-  inputRoot: null,
-  form: DEFAULT_FORM,
-  status: "idle",
-  progress: { processed: 0, total: 0 },
+/** 選び直し・全消しで共通に戻す部分（結果とサムネは持ち越さない）。**毎回新しく作る**。 */
+const cleared = (): Pick<
+  ConvertState,
+  | "sourceInfo"
+  | "infoLimit"
+  | "previewPath"
+  | "preview"
+  | "previewRendering"
+  | "previewError"
+  | "items"
+  | "stats"
+  | "report"
+  | "status"
+> => ({
+  sourceInfo: new Map(),
+  infoLimit: 0,
+  previewPath: null,
+  preview: null,
+  previewRendering: false,
+  previewError: null,
   items: [],
   stats: null,
   report: null,
+  status: "idle",
+});
 
-  setForm: (patch) => set((s) => ({ form: { ...s.form, ...patch } })),
-  setSources: (sources) => set({ sources, items: [], stats: null, report: null, status: "idle" }),
-  setInputRoot: (inputRoot) => set({ inputRoot }),
-  reset: () =>
-    set({ sources: [], inputRoot: null, items: [], stats: null, report: null, status: "idle" }),
+/**
+ * 代表画像の原寸が分かった時点で寸法欄を埋める。**まだ空のときだけ**
+ * （取得を待つ間に利用者が打ち始めていたら、それを上書きしない）。
+ */
+function prefillDimensions(
+  path: string,
+  info: SourceInfo,
+  get: () => ConvertState,
+  set: (patch: Partial<ConvertState>) => void,
+): void {
+  // **選び直しごとに一度だけ。** 後から届いた原寸が、利用者が意図的に空にした欄を
+  // 埋め直す（＝黙って変換内容が変わる）ことを防ぐ。
+  if (prefilledGen === sourcesGen) return;
+  if (info.width <= 0 || path !== representativePath(get())) return;
+  const form = get().form;
+  if (form.width.trim() !== "" || form.height.trim() !== "") return;
+  prefilledGen = sourcesGen;
+  set({ form: { ...form, width: String(info.width), height: String(info.height) } });
+}
 
-  cancel: () => {
-    // 走行中・待機中の submit がまとめて reject され、run 側の catch が idle へ戻す。
-    pool.reset("変換を中断しました");
-  },
-
-  validate: () => {
-    const { sources, form } = get();
-    if (sources.length === 0) return "変換する画像がありません。";
-    const resolved = resolveOptions(form);
-    if ("error" in resolved) return resolved.error;
-    // 画質を触っていれば「同じ形式のまま再圧縮する」という明示の指定なので素通ししない。
-    // 触っていないのに全件が素通しなら、やることが無い。
-    if (
-      !form.qualityTouched &&
-      sources.every((s) => isPassThrough(resolved.options, extOf(s.path)))
-    ) {
-      return "変換する指定がありません（寸法・出力形式・画質のどれかを指定してください）。";
-    }
-    // 同じ実行の中で出力名が衝突するなら**始める前に**止める（途中で 1 枚ずつ失敗させない）。
-    const collisions = findOutputCollisions(sources, resolved.options.format);
-    if (collisions.length > 0) {
-      const first = collisions[0];
-      const more = collisions.length > 1 ? `ほか ${collisions.length - 1} 件` : "";
-      return `出力名が重なります: ${first.srcs.join(" と ")} がどちらも ${first.dst} になります。${more}`;
-    }
-    return null;
-  },
-
-  run: async (sink: ConvertSink) => {
-    if (running) return;
-    const { sources, form } = get();
-    const resolved = resolveOptions(form);
-    if ("error" in resolved) {
-      toast.error(resolved.error);
-      return;
-    }
-
-    running = true;
-    set({
-      status: "converting",
+export const useConvertStore = create<ConvertState>()(
+  persist(
+    (set, get) => ({
+      sources: [],
+      inputRoot: null,
+      form: DEFAULT_FORM,
+      status: "idle",
+      progress: { processed: 0, total: 0 },
       items: [],
       stats: null,
-      report: null, // 前回の報告を残すと、失敗・中断したときに古い成功が居座る
-      progress: { processed: 0, total: sources.length },
-    });
-    try {
-      const { items, stats, vipsVersion } = await runConvert(
-        sources,
-        resolved.options,
-        sink,
-        pool.get(),
-        POOL_SIZE,
-        rafThrottle<ConvertProgress>((progress) => set({ progress })),
-      );
-      set({
-        items,
-        stats,
-        // SPEC §5.4 の出力契約を実体として組み立てる（適用した設定の記録も兼ねる）。
-        report: {
-          schemaVersion: SCHEMA_VERSION,
-          kind: "convert",
-          producer: {
-            app: "web",
-            appVersion: APP_VERSION,
-            vips: vipsVersion || "wasm-vips",
-            hashAlgo: HASH_ALGO_VERSION,
+      report: null,
+      sourceInfo: new Map(),
+      infoLimit: 0,
+      previewPath: null,
+      preview: null,
+      previewRendering: false,
+      previewError: null,
+
+      setForm: (patch) => set((s) => ({ form: { ...s.form, ...patch } })),
+      setSources: (sources) => {
+        sourcesGen += 1;
+        previewQueued = false;
+        infoInflight.clear();
+        // **寸法は毎回リセットする。** 選び直したら新しい画像の原寸から始める（記憶もしない）。
+        set((s) => ({ ...cleared(), sources, form: { ...s.form, width: "", height: "" } }));
+      },
+      setInputRoot: (inputRoot) => set({ inputRoot }),
+      // 選び直しと同じ後始末に、入力フォルダの忘却を足すだけ。
+      reset: () => {
+        get().setSources([]);
+        set({ inputRoot: null });
+      },
+
+      setPreviewPath: (previewPath) => set({ previewPath }),
+
+      previewAsPng: async () => {
+        const preview = get().preview;
+        if (!preview) throw new Error("プレビューがまだありません");
+        if (preview.format === "png") return preview.blob;
+        // 見えている結果そのものを包み直す（元画像から作り直すと、設定次第で別物になり得る）。
+        const bytes = await preview.blob.arrayBuffer();
+        const res = (await pool.get().submit(
+          {
+            op: "convert",
+            path: preview.path,
+            bytes,
+            options: {
+              width: null,
+              height: null,
+              fit: "cover",
+              gravity: "center",
+              background: null,
+              format: "png",
+              quality: 100,
+              // 形式を変えるので素通しにはならないが、意図を明示しておく。
+              forceReencode: true,
+            },
+            srcFormat: preview.format,
           },
-          root: get().inputRoot?.name ?? "",
-          createdAt: new Date().toISOString(),
-          options: resolved.options,
-          items,
-          stats,
+          [bytes],
+        )) as ConvertResult;
+        if (res.error != null || !res.out) {
+          throw new Error(res.error ?? "png に変換できませんでした");
+        }
+        return new Blob([res.out], { type: mimeOf("png") });
+      },
+
+      renderPreview: async () => {
+        const state = get();
+        // 本番の変換とプールを奪い合わない。**要求は覚えておき**、終わってからやり直す。
+        if (state.status === "converting") {
+          previewQueued = true;
+          return;
+        }
+        // 走行中なら「もう一度やる」とだけ覚えて戻る（要求を溜め込まない）。
+        if (previewBusy) {
+          previewQueued = true;
+          return;
+        }
+        const path = representativePath(state);
+        const src = state.sources.find((s) => s.path === path);
+        if (!src) return;
+        const resolved = resolveOptions(state.form);
+        // 入力が不正なときは黙って前の絵を残す（理由は実行ボタンの下に出ている）。
+        if ("error" in resolved) return;
+
+        const gen = sourcesGen;
+        const key = previewKey(state);
+        previewBusy = true;
+        set({ previewRendering: true, previewError: null });
+        try {
+          const srcFormat = extOf(src.path);
+          // **本番と同じ入口を通す**（素通し判定も含めて）。別に書くと「プレビューだけ違う」が生まれる。
+          const out = await convertSource(src, resolved.options, pool.get());
+          if (gen !== sourcesGen) return; // 選び直された後に返ってきた結果は捨てる
+          const format = normalizeOutFormat(resolved.options.format ?? srcFormat);
+          // 素通しは寸法を返さない（デコードしていない）ので、サムネ取得時の原寸を使う。
+          const info = get().sourceInfo.get(src.path);
+          set({
+            preview: {
+              path: src.path,
+              blob: new Blob([out.data], { type: mimeOf(format) }),
+              width: out.passedThrough ? (info?.width ?? 0) : out.width,
+              height: out.passedThrough ? (info?.height ?? 0) : out.height,
+              bytes: out.data.byteLength,
+              format,
+              passedThrough: out.passedThrough,
+              key,
+            },
+          });
+        } catch (e) {
+          if (gen !== sourcesGen) return;
+          // 中断（プール破棄）はプレビューの失敗ではない。
+          if (e instanceof PoolAbortError) return;
+          set({ previewError: errText(e) });
+        } finally {
+          previewBusy = false;
+          set({ previewRendering: false });
+          if (previewQueued) {
+            previewQueued = false;
+            void get().renderPreview();
+          }
+        }
+      },
+
+      loadSourceInfo: async (upTo) => {
+        const sources = get().sources;
+        const limit = Math.max(get().infoLimit, Math.max(0, Math.min(upTo, sources.length)));
+        const gen = sourcesGen;
+        // **上限が伸びていなくても、取れていない分は取り直す**（中断で落ちた要求が
+        // 「読み込み済み」のまま欠けたままにならないように）。
+        const want = sources
+          .slice(0, limit)
+          .filter((s) => !get().sourceInfo.has(s.path) && !infoInflight.has(s.path));
+        if (want.length === 0) {
+          set({ infoLimit: limit });
+          return;
+        }
+        set({ infoLimit: limit });
+        for (const s of want) infoInflight.add(s.path);
+
+        // 同時に読む数を絞る。並列度ではなく**メモリ**が目的（1 件ごとにファイル全体を読む）。
+        // **ワーカーを 1 本空けておく**: 全部埋めると、利用者が見ているプレビューが
+        // 12 枚のサムネの後ろに並んで最後に出てくる。
+        await runBounded(want, Math.max(1, POOL_SIZE - 1), async (src) => {
+          try {
+            if (gen !== sourcesGen) return; // 選び直された: 読む前にやめる
+            const bytes = await src.bytes();
+            const res = (await pool
+              .get()
+              .submit({ op: "info", path: src.path, bytes }, [bytes])) as InfoResult;
+            if (gen !== sourcesGen) return; // 選び直された後に返ってきた結果は捨てる
+            const info: SourceInfo = {
+              thumb: res.thumb ? new Blob([res.thumb], { type: mimeOf("webp") }) : undefined,
+              width: res.width,
+              height: res.height,
+              bytes: res.bytes,
+            };
+            set((s) => ({ sourceInfo: new Map(s.sourceInfo).set(src.path, info) }));
+            prefillDimensions(src.path, info, get, set);
+          } catch {
+            // サムネは無くても変換はできる。中断（PoolAbortError）もここで飲む
+            // ——「変換を中断した」のであって、サムネの失敗を報せる場面ではない。
+          } finally {
+            infoInflight.delete(src.path);
+          }
+        });
+      },
+
+      cancel: () => {
+        // 走行中・待機中の submit がまとめて reject され、run 側の catch が idle へ戻す。
+        pool.reset("変換を中断しました");
+      },
+
+      validate: () => {
+        const { sources, form } = get();
+        if (sources.length === 0) return "変換する画像がありません。";
+        const resolved = resolveOptions(form);
+        if ("error" in resolved) return resolved.error;
+        // 画質を触っていれば「同じ形式のまま再圧縮する」という明示の指定なので素通ししない。
+        // 触っていないのに全件が素通しなら、やることが無い。
+        if (
+          !form.qualityTouched &&
+          sources.every((s) => isPassThrough(resolved.options, extOf(s.path)))
+        ) {
+          return "変換する指定がありません（寸法・出力形式・画質のどれかを指定してください）。";
+        }
+        return null;
+      },
+
+      validateCollisions: () => {
+        const { sources, form } = get();
+        const resolved = resolveOptions(form);
+        if ("error" in resolved) return null; // 先に validate が理由を返している
+        // 同じ実行の中で出力名が衝突するなら**始める前に**止める（途中で 1 枚ずつ失敗させない）。
+        const collisions = findOutputCollisions(sources, resolved.options.format);
+        if (collisions.length === 0) return null;
+        const first = collisions[0];
+        const more = collisions.length > 1 ? `ほか ${collisions.length - 1} 件` : "";
+        return `出力名が重なります: ${first.srcs.join(" と ")} がどちらも ${first.dst} になります。${more}`;
+      },
+
+      run: async (sink: ConvertSink, options: ConvertOptions) => {
+        if (running) return;
+        const sources = get().sources;
+        if (sources.length === 0) return;
+
+        running = true;
+        set({
+          status: "converting",
+          items: [],
+          stats: null,
+          report: null, // 前回の報告を残すと、失敗・中断したときに古い成功が居座る
+          progress: { processed: 0, total: sources.length },
+        });
+        try {
+          const { items, stats, vipsVersion } = await runConvert(
+            sources,
+            options,
+            sink,
+            pool.get(),
+            POOL_SIZE,
+            rafThrottle<ConvertProgress>((progress) => set({ progress })),
+          );
+          set({
+            items,
+            stats,
+            // SPEC §5.4 の出力契約を実体として組み立てる（適用した設定の記録も兼ねる）。
+            report: {
+              schemaVersion: SCHEMA_VERSION,
+              kind: "convert",
+              producer: {
+                app: "web",
+                appVersion: APP_VERSION,
+                vips: vipsVersion || "wasm-vips",
+                hashAlgo: HASH_ALGO_VERSION,
+              },
+              root: get().inputRoot?.name ?? "",
+              createdAt: new Date().toISOString(),
+              options,
+              items,
+              stats,
+            },
+            status: "done",
+          });
+          if (stats.failed > 0) {
+            toast.warning(
+              `${stats.converted} 件を変換（${stats.failed} 件失敗・${stats.skipped} 件 skip）`,
+            );
+          } else {
+            toast.success(`${stats.converted} 件を変換しました（${stats.skipped} 件 skip）`);
+          }
+        } catch (e) {
+          // 中断（プール破棄）と、編排自体の失敗を区別する。1 件ごとの変換失敗はここへ来ない
+          // （`runConvert` が per-file に記録して正常終了する）。
+          set({ status: "idle" });
+          if (e instanceof PoolAbortError) {
+            toast.info("変換を中断しました");
+          } else {
+            toast.error("変換を中止しました", { description: errText(e) });
+          }
+        } finally {
+          running = false;
+          // 変換中は見送っていたプレビューと、中断で落ちたサムネをここで拾い直す。
+          void get().loadSourceInfo(get().infoLimit);
+          if (previewQueued) {
+            previewQueued = false;
+            void get().renderPreview();
+          }
+        }
+      },
+    }),
+    {
+      name: "imgdiff.convert",
+      version: 1,
+      // 保存できない環境でも**画面は動き続ける**こと。
+      // createJSONStorage は「localStorage を取れない」場合は面倒を見てくれるが、
+      // **書き込みが投げる**場合（Quota 超過・SecurityError）は素通しする。zustand は
+      // set のたびに保存するので、そこで投げると変換の開始処理ごと巻き添えになる。
+      storage: createJSONStorage(() => ({
+        getItem: (k) => localStorage.getItem(k),
+        setItem: (k, v) => {
+          try {
+            localStorage.setItem(k, v);
+          } catch {
+            // 設定が次回に残らないだけ。今の操作は続行する。
+          }
         },
-        status: "done",
-      });
-      if (stats.failed > 0) {
-        toast.warning(
-          `${stats.converted} 件を変換（${stats.failed} 件失敗・${stats.skipped} 件 skip）`,
-        );
-      } else {
-        toast.success(`${stats.converted} 件を変換しました（${stats.skipped} 件 skip）`);
-      }
-    } catch (e) {
-      // 中断（プール破棄）と、編排自体の失敗を区別する。1 件ごとの変換失敗はここへ来ない
-      // （`runConvert` が per-file に記録して正常終了する）。
-      set({ status: "idle" });
-      if (e instanceof PoolAbortError) {
-        toast.info("変換を中断しました");
-      } else {
-        toast.error("変換を中止しました", { description: errText(e) });
-      }
-    } finally {
-      running = false;
-    }
-  },
-}));
+        removeItem: (k) => {
+          try {
+            localStorage.removeItem(k);
+          } catch {
+            // 同上。
+          }
+        },
+      })),
+      // 残すのは再利用できる設定だけ。sources / 結果 / サムネは保存しない。
+      partialize: (s) => ({ form: rememberedForm(s.form) }),
+      // **既定の merge は浅い**ので、これが無いと `form` ごと差し替わり、
+      // 保存していない width / height / overwrite が **undefined になって画面が壊れる**。
+      merge: (persisted, current) => ({
+        ...current,
+        form: {
+          ...current.form,
+          ...sanitizeStoredForm((persisted as { form?: unknown } | undefined)?.form),
+        },
+      }),
+    },
+  ),
+);

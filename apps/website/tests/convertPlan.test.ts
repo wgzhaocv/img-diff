@@ -15,7 +15,12 @@ import {
 } from "@/lib/convertPlan";
 import { findOutputCollisions, outPathFor } from "@/lib/convert";
 import { extOf, isConvertibleImage, isScannableImage, uniquePath } from "@/lib/imagePaths";
-import { DEFAULT_FORM, resolveOptions } from "@/lib/stores/convertStore";
+import {
+  DEFAULT_FORM,
+  rememberedForm,
+  resolveOptions,
+  sanitizeStoredForm,
+} from "@/lib/stores/convertStore";
 
 const base = { srcW: 100, srcH: 50, fit: "cover", gravity: "center" } as const;
 
@@ -34,6 +39,8 @@ describe("規則 1: 拡大しない", () => {
     expect(planGeometry({ ...base, width: 200, height: 100, fit: "contain" })).toEqual({
       kind: "contain",
       scale: 1,
+      // 左右に 100、上下に 50 余る（画面はこの slack を見て寄せる位置の要否を決める）。
+      slack: { x: 100, y: 50 },
       embed: { x: 50, y: 25, width: 200, height: 100 },
     });
   });
@@ -81,6 +88,8 @@ describe("fit ごとの寸法", () => {
     expect(p).toEqual({
       kind: "cover",
       scale: 0.6,
+      // 横だけ 20 余る＝上下に寄せても出力は変わらない。
+      slack: { x: 20, y: 0 },
       crop: { left: 10, top: 0, width: 40, height: 30 },
     });
   });
@@ -91,6 +100,8 @@ describe("fit ごとの寸法", () => {
     expect(p).toEqual({
       kind: "contain",
       scale: 0.4,
+      // 縦だけ 10 余る＝左右に寄せても出力は変わらない。
+      slack: { x: 0, y: 10 },
       embed: { x: 0, y: 5, width: 40, height: 30 },
     });
   });
@@ -409,8 +420,14 @@ describe("フォーム入力の検証（SPEC §5.4 は w/h を u32 とする）"
     if (!("error" in r2)) expect(r2.options.background).toBe("#ff0000");
   });
 
-  it("3 桁の hex は実行前に弾く", () => {
-    expect(err({ background: "fff" })).toMatch(/16 進数/);
+  it("3 桁の hex は、背景が実際に使われるときだけ弾く", () => {
+    // 背景は「収める」の余白にしか使われない。そこでは打ち間違いを実行前に止める。
+    expect(err({ background: "fff", fit: "contain", width: "100", height: "100" })).toMatch(
+      /16 進数/,
+    );
+    // 使われない設定（切り抜き）では、見えない欄の打ち間違いで実行を止めない。
+    expect(err({ background: "fff", fit: "cover", width: "100", height: "100" })).toBeNull();
+    expect(err({ background: "fff", fit: "contain" })).toBeNull();
   });
 });
 
@@ -429,5 +446,55 @@ describe("画質だけの再圧縮（forceReencode）", () => {
     const r = resolveOptions({ ...DEFAULT_FORM, qualityTouched: true, quality: 50 });
     expect("error" in r).toBe(false);
     if (!("error" in r)) expect(r.options.forceReencode).toBe(true);
+  });
+});
+
+describe("次に開いたときも残す設定", () => {
+  it("寸法と上書きは残さない（寸法は画像に付随・上書きは安全側へ戻す）", () => {
+    const keys = Object.keys(rememberedForm(DEFAULT_FORM)).sort();
+    expect(keys).toEqual(
+      ["background", "destination", "fit", "format", "gravity", "quality", "qualityTouched"].sort(),
+    );
+  });
+
+  it("画質は qualityTouched と対で残す（片方だけだと黙って無視される状態になる）", () => {
+    const kept = rememberedForm({ ...DEFAULT_FORM, quality: 60, qualityTouched: true });
+    expect(kept.quality).toBe(60);
+    expect(kept.qualityTouched).toBe(true);
+  });
+
+  it("保存済みの値は型と取り得る値まで検証する", () => {
+    expect(sanitizeStoredForm({ fit: "contain", gravity: "north" })).toEqual({
+      fit: "contain",
+      gravity: "north",
+    });
+    // 知らない値・型違い・未知の鍵は通さない（手で書き換えられていても画面を壊さない）。
+    expect(sanitizeStoredForm({ fit: "banana", gravity: 3, format: "heic" })).toEqual({});
+    expect(sanitizeStoredForm({ overwrite: true, width: "9999" })).toEqual({});
+    expect(sanitizeStoredForm(null)).toEqual({});
+    expect(sanitizeStoredForm("{}")).toEqual({});
+  });
+
+  it("画質は範囲に丸める", () => {
+    const q = (quality: unknown) => sanitizeStoredForm({ quality, qualityTouched: true }).quality;
+    expect(q(999)).toBe(100);
+    expect(q(-5)).toBe(1);
+    expect(q(Number.NaN)).toBe(80);
+  });
+
+  it("画質と「指定した」は対で戻す（片方だけなら両方捨てる）", () => {
+    // 片方だけ戻すと「20 と表示されているのに効かない」「既定値で黙って再符号化する」になる。
+    expect(sanitizeStoredForm({ quality: 20 })).toEqual({});
+    expect(sanitizeStoredForm({ qualityTouched: true })).toEqual({});
+    expect(sanitizeStoredForm({ quality: 20, qualityTouched: true })).toEqual({
+      quality: 20,
+      qualityTouched: true,
+    });
+  });
+
+  it("書けない形式は保存値からも弾く", () => {
+    expect(sanitizeStoredForm({ format: "" }).format).toBe("");
+    expect(sanitizeStoredForm({ format: "webp" }).format).toBe("webp");
+    expect(sanitizeStoredForm({ format: "svg" }).format).toBeUndefined();
   });
 });

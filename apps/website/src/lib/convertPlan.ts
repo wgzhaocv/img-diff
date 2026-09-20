@@ -82,15 +82,22 @@ export type PlanNoop = { kind: "noop" };
 /** 等比縮小だけ（`w` か `h` の片方だけ与えられたとき）。 */
 export type PlanResize = { kind: "resize"; scale: number; width: number; height: number };
 /** 縮小してから切り出す。 */
+/** 目標に対して**余った量**（大きい方 − 小さい方）。0 の軸は寄せる位置を変えても結果が変わらない。 */
+export type Slack = { x: number; y: number };
+
 export type PlanCover = {
   kind: "cover";
   scale: number;
+  /** 切り取りで捨てる量。**画面はこれを見て「効かない寄せる位置」を隠す**（再計算させない）。 */
+  slack: Slack;
   crop: { left: number; top: number; width: number; height: number };
 };
 /** 縮小してから背景で埋めた画布へ置く。 */
 export type PlanContain = {
   kind: "contain";
   scale: number;
+  /** 背景で埋める量。0 なら余白が出ない＝背景色を指定しても意味が無い。 */
+  slack: Slack;
   embed: { x: number; y: number; width: number; height: number };
 };
 /** 非等比に縮小（引き伸ばし）。 */
@@ -189,8 +196,9 @@ export function planGeometry(input: PlanInput): ConvertPlan {
     // 拡大しない縛りのため、目標が中間寸法より大きいことが有り得る。その場合は切り出せる分だけ。
     const cw = Math.min(width, midW);
     const ch = Math.min(height, midH);
-    const { x, y } = offset(gravity, midW - cw, midH - ch);
-    return { kind: "cover", scale, crop: { left: x, top: y, width: cw, height: ch } };
+    const slack = { x: midW - cw, y: midH - ch };
+    const { x, y } = offset(gravity, slack.x, slack.y);
+    return { kind: "cover", scale, slack, crop: { left: x, top: y, width: cw, height: ch } };
   }
 
   // contain: 縮小して、目標寸法の画布へ背景で埋めて置く。
@@ -203,8 +211,31 @@ export function planGeometry(input: PlanInput): ConvertPlan {
   if (midW === width && midH === height) {
     return scale >= 1 ? { kind: "noop" } : { kind: "resize", scale, width: midW, height: midH };
   }
-  const { x, y } = offset(gravity, Math.max(0, width - midW), Math.max(0, height - midH));
-  return { kind: "contain", scale, embed: { x, y, width, height } };
+  const slack = { x: Math.max(0, width - midW), y: Math.max(0, height - midH) };
+  const { x, y } = offset(gravity, slack.x, slack.y);
+  return { kind: "contain", scale, slack, embed: { x, y, width, height } };
+}
+
+/** SPEC §5.4 は w/h を u32 とする。 */
+const MAX_DIM = 0xff_ff_ff_ff;
+
+/**
+ * 寸法欄の生値を「指定された値」として読む。**空も不正も `null`**。
+ *
+ * 丸めてから判定すると `0.4` が 0 になって「指定したのに何も起きない」になるので、
+ * **丸める前に整数性まで見る**。画面の表示判定（`relevantControls`）と実行前の検証
+ * （`resolveOptions`）が同じ規則を使うため、読み取りはここ 1 つだけに置く。
+ */
+export function parseDim(raw: string): number | null {
+  const t = raw.trim();
+  if (t === "") return null;
+  const n = Number(t);
+  return Number.isInteger(n) && n >= 1 && n <= MAX_DIM ? n : null;
+}
+
+/** 空ではないのに読めない＝打ち間違い（空欄は「指定なし」なので誤りではない）。 */
+export function isBadDim(raw: string): boolean {
+  return raw.trim() !== "" && parseDim(raw) === null;
 }
 
 /** `writeToBuffer` へ渡す保存指定。 */

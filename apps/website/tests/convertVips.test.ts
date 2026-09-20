@@ -7,9 +7,11 @@
 
 import { beforeAll, describe, expect, it } from "vite-plus/test";
 import type { ConvertOptions } from "schema";
-import { applyConvert, type Vips } from "@/workers/vips";
+import { applyConvert, applyInfo, type Vips } from "@/workers/vips";
 
 let vips: Vips;
+/** `makePng` は node 版の API（`newFromMemory`）を使うので、同じ実体を別の型で持つ。 */
+let vipsNode: VipsNode;
 /** 1024x1024 相当を避けて軽く回すための合成画像（左半分が濃い色・右半分が暗い色）。 */
 let squarePng: ArrayBuffer;
 let widePng: ArrayBuffer;
@@ -54,6 +56,7 @@ beforeAll(async () => {
   const v = await mod.default({ dynamicLibraries: ["vips-heif.wasm", "vips-jxl.wasm"] });
   v.concurrency(1);
   vips = v as unknown as Vips;
+  vipsNode = v;
   squarePng = makePng(v, 100, 100);
   widePng = makePng(v, 100, 50);
 }, 60_000);
@@ -312,5 +315,31 @@ describe("gravity", () => {
       "png",
     );
     expect(meanOf(west.out)).toBeGreaterThan(meanOf(east.out));
+  });
+});
+
+describe("入力一覧の情報取得（applyInfo）", () => {
+  it("原寸とサムネを返し、**全分解能の複製を作らない**", () => {
+    const r = applyInfo(vips, widePng); // 100×50
+    expect(r.width).toBe(100);
+    expect(r.height).toBe(50);
+    // 長辺 256 に収める＝拡大はしないので原寸のまま。
+    const th = inspect(r.thumb);
+    expect(th.loader).toBe("webpload_buffer");
+    expect(th.width).toBe(100);
+  });
+
+  it("大きい画像は長辺 256 まで縮む（縦横比は保つ）", () => {
+    const big = makePng(vipsNode, 1024, 512);
+    const r = applyInfo(vips, big);
+    expect(r.width).toBe(1024);
+    expect(r.height).toBe(512);
+    const th = inspect(r.thumb);
+    expect(th.width).toBe(256);
+  });
+
+  it("デコードできない入力は握り潰さず投げる（画面が「読み込めません」と言えるように）", () => {
+    const garbage = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]).buffer;
+    expect(() => applyInfo(vips, garbage)).toThrow();
   });
 });

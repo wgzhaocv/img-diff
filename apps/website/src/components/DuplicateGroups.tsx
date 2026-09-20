@@ -6,6 +6,7 @@ import { Thumb } from "@/components/Thumb";
 import { DeleteDuplicatesButton } from "@/components/DeleteDuplicatesButton";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/format";
+import { baseNameOf } from "@/lib/imagePaths";
 import { STRICTNESS_LABEL, type DupGroup, type ImageRecord } from "@/lib/core";
 import { useScanStore } from "@/lib/stores/scanStore";
 
@@ -136,7 +137,7 @@ function GroupCard({
                 ) : null}
               </div>
               <figcaption className="truncate text-xs text-muted-foreground" title={path}>
-                {path.split("/").pop()}
+                {baseNameOf(path)}
               </figcaption>
               {rec ? (
                 <div className="num text-xs text-muted-foreground">

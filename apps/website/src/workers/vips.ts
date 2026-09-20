@@ -51,7 +51,15 @@ type VipsImage = {
 };
 /** wasm-vips の実体（テストは node 版を直接読んで渡す）。 */
 export type Vips = {
-  Image: { newFromBuffer(data: Uint8Array, strOptions?: string): VipsImage };
+  Image: {
+    newFromBuffer(data: Uint8Array, strOptions?: string): VipsImage;
+    /** **shrink-on-load** つきの縮小読み込み（jpeg なら間引いて読む）。サムネ専用。 */
+    thumbnailBuffer(
+      data: Uint8Array,
+      width: number,
+      options?: { height?: number; size?: string },
+    ): VipsImage;
+  };
   concurrency(n: number): void;
   Cache: { max(n: number): void; maxMem(n: number): void };
   /** libvips の版（例 "8.18.3"）。`Producer.vips` に入れる。 */
@@ -159,6 +167,48 @@ export async function decodeCanonical(
     return { rgba, width, height, thumb };
   } finally {
     for (const im of trash) im.delete(); // wasm-vips のメモリは手動解放（leak 防止）。
+  }
+}
+
+/** 表示用の情報（原寸とサムネ）。画素の複製は作らない。 */
+export type ImageInfo = {
+  width: number;
+  height: number;
+  /** ~256px の webp。非 SAB（Blob 化のため）。 */
+  thumb: Uint8Array<ArrayBuffer>;
+};
+
+/** [`applyInfo`] のブラウザ向け入口。 */
+export async function imageInfo(bytes: ArrayBuffer): Promise<ImageInfo> {
+  return applyInfo(await getVips(), bytes);
+}
+
+/**
+ * **見せるためだけ**の情報を取る（原寸 + サムネ）。scan の `decode`/`hash` とは別経路。
+ *
+ * `decodeCanonical` を流用すると、サムネ 1 枚のために**全分解能の RGBA**（`writeToMemory`）と
+ * dHash を作ることになる。実測 4000×3000 の JPEG で 165ms / 45.8MB —— こちらは
+ * `thumbnailBuffer` の shrink-on-load で **53ms・その確保なし**（出力 webp は同一バイト数）。
+ *
+ * **サムネが作れない＝画素をデコードできない**ので、ここは握り潰さず投げる
+ * （libvips は遅延評価なので、寸法が読めても実際に描けるとは限らない。
+ *   web の wasm-vips は HEVC の HEIC がこれに当たる）。
+ */
+export function applyInfo(vips: Vips, bytes: ArrayBuffer): ImageInfo {
+  const trash: VipsImage[] = [];
+  const keep = <T extends VipsImage>(im: T): T => {
+    trash.push(im);
+    return im;
+  };
+  try {
+    const u8 = new Uint8Array(bytes);
+    // 原寸はヘッダだけで分かる（autorot も遅延なので、ここでは画素を触らない）。
+    const rotated = keep(keep(vips.Image.newFromBuffer(u8)).autorot());
+    const { width, height } = rotated;
+    const t = keep(vips.Image.thumbnailBuffer(u8, THUMB_MAX, { height: THUMB_MAX, size: "down" }));
+    return { width, height, thumb: new Uint8Array(t.writeToBuffer(".webp[Q=80]")) };
+  } finally {
+    for (const im of trash) im.delete();
   }
 }
 
