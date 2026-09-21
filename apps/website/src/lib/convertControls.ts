@@ -99,61 +99,48 @@ export function qualityApplies(outFormat: string): boolean {
  *   片方だけなら `planGeometry` は等比縮小して `fit` を無視する）。
  * - 寄せる位置: 上に加えて `cover` / `contain` のときだけ（`fill` は gravity を使わない）。
  * - 背景色: 上に加えて `contain` のときだけ（背景は余白の埋めにしか使わない）。
- * - 画質: 実効出力形式が `Q` を取るときだけ。形式が「入力と同じ」なら**入力のどれか 1 つでも**
- *   該当すれば出す（1 件でも効くなら、指定できないと困る）。このとき、そもそも書き出せない
- *   形式（heic / svg）は数えない —— 出力形式が入力と同じならその件は必ず失敗するので、
- *   画質を出す理由にならない。
+ * - 画質: 実効出力形式が `Q` を取るときだけ。形式が「入力と同じ」なら入力の形式で判定する
+ *   （そもそも書けない形式（heic / svg）なら、出力形式が入力と同じ指定は必ず失敗するので
+ *   画質を出す理由にならない —— `qualityApplies` が `saveSpec` に聞くのでそこは自動的に false）。
  */
 export function relevantControls(
   form: RelevanceInput,
-  srcFormats: string[],
-  /**
-   * **入力すべての原寸**（分かっているときだけ）。1 枚でも寸法が分からないなら `null` を渡すこと。
-   *
-   * 代表 1 枚だけで判断してはいけない —— 設定はバッチ全体に掛かるので、
-   * 「正方形の代表には切り取りが起きないが、横長の 2 枚目には起きる」とき寄せる位置を隠すと、
-   * **見えない設定が 2 枚目のどこを捨てるかを決めてしまう**。
-   */
-  srcs?: { width: number; height: number }[] | null,
+  /** 入力の拡張子。「入力と同じ形式」のときに画質が効くかの判定に使う。 */
+  srcFormat: string,
+  /** 入力の原寸（まだ分からないなら `null`）。分かっていれば計画から答えられる。 */
+  src?: { width: number; height: number } | null,
 ): ControlRelevance {
   const width = parseDim(form.width);
   const height = parseDim(form.height);
   const fit = width != null && height != null;
 
   const out = form.format.trim();
-  const quality =
-    out === ""
-      ? srcFormats.some((f) => {
-          // `qualityApplies` は saveSpec に聞くので、書けない形式は自動的に false。
-          return qualityApplies(f);
-        })
-      : qualityApplies(normalizeOutFormat(out));
+  // `qualityApplies` は saveSpec に聞くので、書けない形式は自動的に false。
+  const quality = qualityApplies(out === "" ? srcFormat : normalizeOutFormat(out));
 
-  const known = (srcs ?? []).filter((s) => s.width > 0 && s.height > 0);
-  // 全部の原寸が分かっているときだけ、計画（= 実際に走る算術）から答える。
-  if (fit && srcs != null && known.length > 0 && known.length === srcs.length) {
-    // どれか 1 枚でも効くなら出す（合併）。
-    let axes = { x: false, y: false };
-    let background = false;
-    for (const src of known) {
-      const plan = planGeometry({
-        srcW: src.width,
-        srcH: src.height,
-        width,
-        height,
-        fit: form.fit,
-        // gravity は余りの**配り方**しか決めない。軸の判定には影響しない。
-        gravity: "center",
-      });
-      const a = gravityAxes(plan);
-      axes = { x: axes.x || a.x, y: axes.y || a.y };
+  // 原寸が分かっているときだけ、計画（= 実際に走る算術）から答える。
+  if (fit && src != null && src.width > 0 && src.height > 0) {
+    const plan = planGeometry({
+      srcW: src.width,
+      srcH: src.height,
+      width,
+      height,
+      fit: form.fit,
+      // gravity は余りの**配り方**しか決めない。軸の判定には影響しない。
+      gravity: "center",
+    });
+    const axes = gravityAxes(plan);
+    return {
+      fit,
+      gravity: axes.x || axes.y,
       // 背景は contain の余白にしか使わない（余白が出ないときは kind が contain にならない）。
-      background = background || plan.kind === "contain";
-    }
-    return { fit, gravity: axes.x || axes.y, background, quality, axes };
+      background: plan.kind === "contain",
+      quality,
+      axes,
+    };
   }
 
-  // 原寸が分からない枚数が残っているときは、文字列から分かる範囲で答える
+  // 原寸が分からないうちは、文字列から分かる範囲で答える
   // （効かないと**証明できていない**ものは消さない）。
   return {
     fit,
@@ -177,15 +164,9 @@ export const PRESET_WIDTHS = [3840, 2048, 1920, 1200, 1080, 828, 750, 640, 384];
 /**
  * 実際に縮む幅だけを返す。原寸以上は「拡大しない」縛り（SPEC §5.4 規則 1）で何も起きないので、
  * 押せる選択肢として出さない。
- *
- * 基準は**分かっている入力のうち最大の幅**で、`relevantControls` と違い**全件が揃うのを待たない**。
- * 差は危険度にある: 寄せる位置を早まって隠すと見えない設定が画像を切り落とすが、
- * 幅の選択肢が 1 つ余分に出ても、押さなければ何も起きないし押しても等比に縮むだけ。
- * サムネは先頭から順にしか取らないので、待つと大きなバッチで階段が丸ごと消える。
  */
-export function presetWidths(srcs: { width: number }[] | null | undefined): number[] {
-  let max = 0;
-  for (const s of srcs ?? []) max = Math.max(max, s.width);
+export function presetWidths(src: { width: number } | null | undefined): number[] {
+  const max = src?.width ?? 0;
   return PRESET_WIDTHS.filter((w) => w < max);
 }
 
@@ -230,6 +211,11 @@ export function projectGravity(
 ): ConvertGravity {
   const p = gravityParts(g);
   return gravityFromParts(axes.y ? p.y : "", axes.x ? p.x : "");
+}
+
+/** ワーカーが返したサムネ（webp バイト）を Blob にする。scan と convert が共有する。 */
+export function webpBlob(bytes: Uint8Array<ArrayBuffer>): Blob {
+  return new Blob([bytes], { type: mimeOf("webp") });
 }
 
 /** 形式ごとの MIME（Blob を作って `<img>` に出すため）。 */

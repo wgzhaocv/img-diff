@@ -1,58 +1,44 @@
 import { useEffect } from "react";
 import { ScreenHeader } from "@/components/ScreenHeader";
-import { ConvertDestination } from "@/components/ConvertDestination";
 import { ConvertOptions } from "@/components/ConvertOptions";
 import { ConvertPicker } from "@/components/ConvertPicker";
 import { ConvertPreview } from "@/components/ConvertPreview";
-import { ConvertProgress } from "@/components/ConvertProgress";
-import { ConvertResult } from "@/components/ConvertResult";
-import { ConvertSources } from "@/components/ConvertSources";
 import { useConvertStore } from "@/lib/stores/convertStore";
 
-// 変換画面（SPEC §5.4）。入力フォルダには一切書かず、出力は「別に選んだフォルダ」か zip。
+// 変換画面（SPEC §5.4）。**扱うのは 1 枚だけ**で、この画面に「実行」は無い ——
+// プレビューが成果物そのものなので、`保存` を押すとブラウザの既定のダウンロード先へ落ちる。
 //
-// **この殻は状態をほとんど購読しない。** 進捗は 1 件終わるごとに更新され、実測で最大
-// ~580 回/秒に達する。ここでストア全体を読むと画面がまるごと毎フレーム描き直されるので、
-// 各部品が**自分に要る値だけ**を zustand の selector で取り、ここは「画像が在るか」しか見ない。
-// 進捗はそれ専用の部品（ConvertProgress）に閉じ込めてある。
+// **この殻は状態をほとんど購読しない。** 各部品が**自分に要る値だけ**を zustand の
+// selector で取り、ここは「画像が在るか」しか見ない。
 
 export function ConvertScreen() {
-  const hasSources = useConvertStore((s) => s.sources.length > 0);
+  const hasSource = useConvertStore((s) => s.source != null);
   const warmEngine = useConvertStore((s) => s.warmEngine);
 
   // **画面を開いた時点で wasm-vips を起こす。**（約 11.9MB / 実測 2.5 秒）
-  // `hasSources` で条件を付けない —— 画像を選んでいる間にダウンロードを重ねるのが目的。
+  // `hasSource` で条件を付けない —— 画像を選んでいる間にダウンロードを重ねるのが目的。
   useEffect(() => {
     void warmEngine();
   }, [warmEngine]);
 
   return (
     <div className="mx-auto max-w-4xl space-y-8">
-      {/* 出力先は「保存先」で、ブラウザ内完結は脚注で言っている。ここは残る 1 つだけ。 */}
+      {/* ブラウザ内完結は脚注で言っている。ここは残る 1 つだけ。 */}
       <ScreenHeader title="形式を変換">
-        寸法と形式をまとめて変換します。元のフォルダには書き込みません。
+        画像 1 枚の寸法と形式を変えて、そのまま保存します。
       </ScreenHeader>
 
-      {hasSources ? (
+      {hasSource ? (
         <div className="grid gap-8 md:grid-cols-2">
-          {/* 左 = 今の設定で実際に変換した 1 枚と、選んだ画像の一覧。
+          {/* 左 = 今の設定で実際に変換した結果と、その保存。
               狭い画面では設定より先に積む（何に対する設定なのかが先に見えるように）。 */}
-          <div className="space-y-6">
-            <ConvertPreview />
-            <ConvertSources />
-          </div>
-          {/* 右 = 設定と、保存先を兼ねた実行。 */}
-          <div className="space-y-6">
-            <ConvertOptions />
-            <ConvertDestination />
-          </div>
+          <ConvertPreview />
+          {/* 右 = 設定。 */}
+          <ConvertOptions />
         </div>
       ) : (
         <ConvertPicker />
       )}
-
-      <ConvertProgress />
-      <ConvertResult />
     </div>
   );
 }

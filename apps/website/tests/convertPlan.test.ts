@@ -13,13 +13,11 @@ import {
   planGeometry,
   saveSpec,
 } from "@/lib/convertPlan";
-import { findOutputCollisions, outPathFor } from "@/lib/convert";
+import { outPathFor } from "@/lib/convert";
 import { extOf, isConvertibleImage, isScannableImage, uniquePath } from "@/lib/imagePaths";
 import {
   DEFAULT_FORM,
-  formSettled,
   previewKey,
-  previewSettled,
   rememberedForm,
   resolveOptions,
   sanitizeStoredForm,
@@ -310,31 +308,7 @@ describe("出力ファイル名", () => {
   });
 });
 
-describe("出力名の衝突（同じ実行の中で自分同士がぶつかる）", () => {
-  it("形式を変えると別拡張子の同名が衝突することを、始める前に見つける", () => {
-    const c = findOutputCollisions([{ path: "a/x.jpg" }, { path: "a/x.png" }], "webp");
-    expect(c).toEqual([{ dst: "a/x.webp", srcs: ["a/x.jpg", "a/x.png"] }]);
-  });
-
-  it("形式を変えなければ衝突しない", () => {
-    expect(findOutputCollisions([{ path: "a/x.jpg" }, { path: "a/x.png" }], null)).toEqual([]);
-  });
-
-  it("ディレクトリが違えば衝突しない", () => {
-    expect(findOutputCollisions([{ path: "a/x.jpg" }, { path: "b/x.png" }], "webp")).toEqual([]);
-  });
-
-  it("結果は決定的（dst 昇順・srcs 昇順）", () => {
-    const c = findOutputCollisions(
-      [{ path: "z.png" }, { path: "a.gif" }, { path: "z.jpg" }, { path: "a.bmp" }],
-      "webp",
-    );
-    expect(c.map((x) => x.dst)).toEqual(["a.webp", "z.webp"]);
-    expect(c[0].srcs).toEqual(["a.bmp", "a.gif"]);
-  });
-});
-
-describe("ドロップした同名ファイルの取りこぼし防止", () => {
+describe("同名ファイルの取りこぼし防止（scan の File[] 経路）", () => {
   it("同名は連番になり、1 件も消えない", () => {
     const used = new Set<string>();
     const keys = ["IMG_1.jpg", "IMG_1.jpg", "IMG_1.jpg"].map((n) => {
@@ -511,101 +485,52 @@ describe("次に開いたときも残す設定", () => {
   });
 });
 
-describe("読めるが書けない形式は実行前に止める", () => {
-  const form = { ...DEFAULT_FORM, width: "100", height: "100" };
-  const src = (path: string) => ({ path, bytes: () => Promise.resolve(new ArrayBuffer(0)) });
-
-  it("heic を変換しようとして出力形式が未指定なら理由を返す", () => {
-    useConvertStore.getState().setSources([src("a.heic")]);
-    useConvertStore.getState().setForm(form);
-    expect(useConvertStore.getState().validate()).toMatch(/書き出せません/);
-  });
-
-  it("出力形式を指定すれば通る", () => {
-    useConvertStore.getState().setSources([src("a.heic")]);
-    useConvertStore.getState().setForm({ ...form, format: "jpg" });
-    expect(useConvertStore.getState().validate()).toBeNull();
-  });
-
-  it("素通しになる分は止めない（元のバイト列をそのまま出すだけなので）", () => {
-    useConvertStore.getState().setSources([src("a.heic")]);
-    // 寸法も形式も指定しない＝何も変えない ⇒ 素通し。ただし「やることが無い」は別の理由で止まる。
-    useConvertStore.getState().setForm({ ...DEFAULT_FORM, width: "", height: "" });
-    expect(useConvertStore.getState().validate()).toMatch(/変換する指定がありません/);
-  });
-});
-
 describe("プレビューは原寸が届いてから作る", () => {
   const src = (path: string) => ({ path, bytes: () => Promise.resolve(new ArrayBuffer(0)) });
   const info = { width: 1024, height: 1024, bytes: 1_700_000 };
 
   it("原寸が届くと鍵が変わる（＝先に始めた分は捨てるために符号化したことになる）", () => {
-    useConvertStore.getState().setSources([src("a.png")]);
+    useConvertStore.getState().setSource(src("a.png"));
     useConvertStore.getState().setForm({ ...DEFAULT_FORM, format: "avif" });
     const unknown = previewKey(useConvertStore.getState());
-    useConvertStore.setState({ sourceInfo: new Map([["a.png", info]]) });
+    useConvertStore.setState({ info });
     expect(previewKey(useConvertStore.getState())).not.toBe(unknown);
   });
 
   it("原寸を知らないうちは走らせない（走らせると二度手間の上に、大きすぎる画像を止められない）", async () => {
-    useConvertStore.getState().setSources([src("a.png")]);
+    useConvertStore.getState().setSource(src("a.png"));
     useConvertStore.getState().setForm({ ...DEFAULT_FORM, format: "avif" });
-    useConvertStore.setState({ loadSourceInfo: () => Promise.resolve() });
+    useConvertStore.setState({ loadInfo: () => Promise.resolve() });
     await useConvertStore.getState().renderPreview();
     expect(useConvertStore.getState().preview).toBeNull();
     expect(useConvertStore.getState().previewRendering).toBe(false);
-    // **答えを書かずに戻る**＝まだ試していない。保存ボタンはここでは押せない。
-    expect(previewSettled(useConvertStore.getState())).toBe(false);
+    // 答えを書かずに戻る＝まだ試していない。保存ボタンが見る `preview` も空のまま。
+    expect(useConvertStore.getState().preview).toBeNull();
   });
 
-  it("原寸が無いときは取りに行かせる（中断で 1 枚だけ落ちていても詰まらない）", async () => {
-    // 中断はサムネの失敗を記録しないので、催促しないと鍵が二度と変わらず、
-    // プレビューも保存ボタンも永久に止まる（「もっと見る」が出ない枚数だと戻す手も無い）。
-    const asked: number[] = [];
-    useConvertStore.getState().setSources([src("a.png"), src("b.png"), src("c.png")]);
-    useConvertStore.getState().setPreviewPath("c.png");
+  it("原寸が無いときは取りに行かせる（取得が落ちていても詰まらない）", async () => {
+    // 催促しないと鍵が二度と変わらず、プレビューも保存ボタンも永久に止まる。
+    const asked: string[] = [];
+    useConvertStore.getState().setSource(src("a.png"));
     useConvertStore.setState({
-      loadSourceInfo: (upTo) => {
-        asked.push(upTo);
+      loadInfo: () => {
+        asked.push("loadInfo");
         return Promise.resolve();
       },
     });
     await useConvertStore.getState().renderPreview();
-    // 代表は 3 枚目なので、そこまでを要求する。
-    expect(asked).toEqual([3]);
+    expect(asked).toEqual(["loadInfo"]);
   });
 });
 
-describe("待っている間の見せ方", () => {
+describe("エンジンの先起こし", () => {
   const src = (path: string) => ({ path, bytes: () => Promise.resolve(new ArrayBuffer(0)) });
-  const info = { width: 1024, height: 1024, bytes: 1_700_000 };
 
-  it("原寸が届くまで表単は最終形ではない（formSettled）", () => {
-    useConvertStore.getState().setSources([src("a.png")]);
-    expect(formSettled(useConvertStore.getState())).toBe(false);
-    useConvertStore.setState({ sourceInfo: new Map([["a.png", info]]) });
-    expect(formSettled(useConvertStore.getState())).toBe(true);
-  });
-
-  it("その中間態こそが「変換する指定がありません」を出す（だから出すのを待つ）", () => {
-    // `setSources` が寸法欄を空にし、原寸の書き戻しは後から来る。その隙の validate は
-    // 素通し判定で警告を返す —— 利用者は何もしていないので、画面には出さない。
-    useConvertStore.getState().setSources([src("a.png")]);
-    useConvertStore.getState().setForm({ ...DEFAULT_FORM, width: "", height: "" });
-    expect(useConvertStore.getState().validate()).toMatch(/変換する指定がありません/);
-    expect(formSettled(useConvertStore.getState())).toBe(false);
-
-    // 原寸が届いて寸法が入れば、そもそも素通しではなくなる。
-    useConvertStore.setState({ sourceInfo: new Map([["a.png", info]]) });
-    useConvertStore.getState().setForm({ width: "800", height: "" });
-    expect(useConvertStore.getState().validate()).toBeNull();
-  });
-
-  it("エンジンは cold から始まり、選び直しでも戻らない（wasm は使い回す）", () => {
-    useConvertStore.getState().setSources([src("a.png")]);
+  it("cold から始まり、選び直しでも戻らない（wasm は使い回す）", () => {
+    useConvertStore.getState().setSource(src("a.png"));
     expect(useConvertStore.getState().engine).toBe("cold");
     useConvertStore.setState({ engine: "ready" });
-    useConvertStore.getState().setSources([src("b.png")]);
+    useConvertStore.getState().setSource(src("b.png"));
     expect(useConvertStore.getState().engine).toBe("ready");
   });
 });

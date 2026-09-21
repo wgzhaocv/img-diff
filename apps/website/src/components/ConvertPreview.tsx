@@ -10,15 +10,19 @@ import { IMAGE_FRAME } from "@/components/Thumb";
 import { cn } from "@/lib/utils";
 import { useObjectUrl } from "@/lib/useObjectUrl";
 import { Skeleton } from "@/components/ui/skeleton";
-import { previewKey, representativePath, useConvertStore } from "@/lib/stores/convertStore";
+import { previewKey, useConvertStore } from "@/lib/stores/convertStore";
 
-// 今の設定で**実際に 1 枚変換して**結果を見せる（推定値ではない）。
+// 今の設定で**実際に変換して**結果を見せる（推定値ではない）。
 // 切り抜きの位置も余白の色も、言葉で説明するより見た方が早い。
+//
+// **この画面に「実行」は無い。** ここに出ている結果が成果物そのものなので、
+// `保存` がこの機能の主操作 —— ブラウザの既定のダウンロード先へそのまま落ちる
+// （選択ダイアログを出さない＝権限の話が一切発生しない）。
 //
 // 性能のための約束が 3 つある（ストア側で担保）:
 //   1. 入力が止まってから 300ms 待つ（スライダを掴んで動かしても走らない）
 //   2. 同時に走るのは**常に 1 枚**。走行中の要求は「最後の 1 回」だけ覚えて後でやり直す
-//   3. 本番の変換中は走らせない（同じワーカープールを奪い合わない）
+//   3. 原寸が届くまで動かさない（DESIGN §7.2）
 
 /** 入力が止まったとみなすまで（ScanScreen の閾値入力と同じ作法）。 */
 const DEBOUNCE_MS = 300;
@@ -28,15 +32,16 @@ export function ConvertPreview() {
   const [copied, setCopied] = useState(false);
   const [copying, setCopying] = useState(false);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const path = useConvertStore(representativePath);
-  // **出力に効く入力だけ**を見張る（保存先や上書きを触っても作り直さない）。
+  const path = useConvertStore((s) => s.source?.path);
+  // **出力に効く入力だけ**を見張る（フォームの他の欄を触っても作り直さない）。
   const key = useConvertStore(previewKey);
   const renderPreview = useConvertStore((s) => s.renderPreview);
   const preview = useConvertStore((s) => s.preview);
   const rendering = useConvertStore((s) => s.previewRendering);
   const loadingEngine = useConvertStore((s) => s.engine === "loading");
   const failure = useConvertStore((s) => s.previewError);
-  const before = useConvertStore((s) => (path == null ? undefined : s.sourceInfo.get(path)));
+  const before = useConvertStore((s) => s.info);
+  const reset = useConvertStore((s) => s.reset);
 
   useEffect(() => {
     const t = setTimeout(() => void renderPreview(), DEBOUNCE_MS);
@@ -81,13 +86,11 @@ export function ConvertPreview() {
   const error = failure?.key === key ? failure.message : null;
   // **絵だけは前のものを残す**（暗くして・見出しは「生成中…」）。avif は 1 枚に数秒かかるので、
   // 作り直すたびに枠を空にすると固まったように見える。数字とボタンは `shown` にしか従わないので、
-  // 古い結果を保存・コピーできてしまうことは無い。条件は 2 つ:
-  //   - **同じ 1 枚に対する作り直しに限る**（代表を選び直したら別の画像の結果は出さない）
-  //   - **理由が出たら引っ込める**（「書き出せません」の横に絵が残っていたら嘘になる）
-  // `previewRendering` では足りない —— 入力が止まるのを待つ 300ms の間はまだ false なので、
+  // 古い結果を保存・コピーできてしまうことは無い。**理由が出たら引っ込める**
+  // （「書き出せません」の横に絵が残っていたら嘘になる）。
+  // `previewRendering` を条件にしては駄目 —— 入力が止まるのを待つ 300ms の間はまだ false なので、
   // そこで一瞬だけ枠が空になる。
-  const stale = shown == null && error == null && preview?.path === path ? preview : null;
-  const pictured = shown ?? stale;
+  const pictured = shown ?? (error == null ? preview : null);
   const afterUrl = useObjectUrl(pictured?.blob ?? null);
   // **保存リンクの href は絵とは別に採る。** `useObjectUrl` は effect で URL を張り替えるので、
   // 新しい結果が届いた最初の 1 フレームは `shown` だけが新しく `afterUrl` はまだ古い blob を指す。
@@ -96,6 +99,8 @@ export function ConvertPreview() {
   //   ボタン自体が出ていなかった）。
   const savableUrl = useObjectUrl(shown?.blob ?? null);
   const renderable = pictured != null && isBrowserRenderable(pictured.format);
+  // **保存できるのは「今の鍵の結果」だけ。** url が blob に追いつくまでは押せない。
+  const ready = shown != null && savableUrl != null;
 
   if (path == null) return null;
   const name = baseNameOf(path);
@@ -104,9 +109,12 @@ export function ConvertPreview() {
     <section className="space-y-2">
       <div className="flex items-baseline justify-between gap-3">
         <h2 className="text-sm font-medium">プレビュー</h2>
-        <span className="truncate text-xs text-muted-foreground" title={path}>
+        <span className="ml-auto truncate text-xs text-muted-foreground" title={path}>
           {name}
         </span>
+        <Button variant="ghost" size="sm" onClick={() => reset()}>
+          選び直す
+        </Button>
       </div>
 
       <div className="grid grid-cols-2 gap-3">
@@ -170,38 +178,49 @@ export function ConvertPreview() {
         </figure>
       </div>
 
-      {savableUrl && shown ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" size="sm" asChild>
+      {/* **ボタンは消さずに無効化する**（UI.md §6.1）。作り直している間に行だけ消えると
+          画面が跳ね、押そうとした手が空を切る。無効なリンクは押しても何も落ちない。 */}
+      <div className="flex flex-wrap items-center gap-2">
+        {/* **これが主操作。** 行き先はブラウザの既定のダウンロード先で、
+            保存ダイアログもフォルダ選択も出さない。
+            `href` を絵とは別の url から張るのは、`useObjectUrl` が effect で張り替える
+            ぶん、新しい結果が届いた最初の 1 フレームだけ絵と食い違うため
+            （そこで押すと「新しい名前で古い画像」が落ちる）。 */}
+        <Button asChild disabled={!ready}>
+          {ready ? (
             <a href={savableUrl} download={outPathFor(name, shown.format)} className="gap-1.5">
               <Download className="size-4" />
               保存
             </a>
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="gap-1.5"
-            onClick={() => void copyImage()}
-            disabled={copying}
-            // 貼り付け先が欲しいのは絵であって形式ではない。ただし黙って替えない。
-            title={
-              shown.format === "png"
-                ? undefined
-                : "クリップボードは png のみ受け取れます（画素はそのまま png で渡します）"
-            }
-          >
-            {copying ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : copied ? (
-              <Check className="size-4 text-primary" />
-            ) : (
-              <Copy className="size-4" />
-            )}
-            {copying ? "コピー中…" : "コピー"}
-          </Button>
-        </div>
-      ) : null}
+          ) : (
+            <span className="gap-1.5">
+              <Download className="size-4" />
+              保存
+            </span>
+          )}
+        </Button>
+        <Button
+          variant="outline"
+          className="gap-1.5"
+          onClick={() => void copyImage()}
+          disabled={!ready || copying}
+          // 貼り付け先が欲しいのは絵であって形式ではない。ただし黙って替えない。
+          title={
+            shown?.format === "png"
+              ? undefined
+              : "クリップボードは png のみ受け取れます（画素はそのまま png で渡します）"
+          }
+        >
+          {copying ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : copied ? (
+            <Check className="size-4 text-primary" />
+          ) : (
+            <Copy className="size-4" />
+          )}
+          {copying ? "コピー中…" : "コピー"}
+        </Button>
+      </div>
     </section>
   );
 }

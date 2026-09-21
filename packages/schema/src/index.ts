@@ -342,6 +342,7 @@ export interface ConvertOptions {
 export type ConvertStatus = "converted" | "skipped" | "failed";
 
 /** convert の 1 件（1 入力 → 1 出力）。src は入力ルート相対、dst は出力先ルート相対 */
+/** **CLI 用**（web は 1 枚だけを扱うので作らない・SPEC §5.4 実装状況）。 */
 export interface ConvertItem {
   src: string;
   dst: string;
@@ -358,6 +359,7 @@ export interface ConvertItem {
   error?: string;
 }
 
+/** **CLI 用**（`ConvertItem` と同じ・SPEC §5.4 実装状況）。 */
 export interface ConvertStats {
   scanned: number;
   converted: number;

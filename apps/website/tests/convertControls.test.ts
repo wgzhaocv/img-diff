@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
+import type { ConvertOptions } from "schema";
 import {
+  cannotWriteReason,
   gravityAxes,
   gravityFromParts,
   gravityParts,
@@ -27,67 +29,67 @@ const sized = (patch: Partial<RelevanceInput> = {}): RelevanceInput => ({
 
 describe("合わせ方（fit）", () => {
   it("幅と高さが両方あるときだけ効く（SPEC §5.4 規則 2）", () => {
-    expect(relevantControls(base, ["png"]).fit).toBe(false);
-    expect(relevantControls({ ...base, width: "800" }, ["png"]).fit).toBe(false);
-    expect(relevantControls({ ...base, height: "600" }, ["png"]).fit).toBe(false);
-    expect(relevantControls(sized(), ["png"]).fit).toBe(true);
+    expect(relevantControls(base, "png").fit).toBe(false);
+    expect(relevantControls({ ...base, width: "800" }, "png").fit).toBe(false);
+    expect(relevantControls({ ...base, height: "600" }, "png").fit).toBe(false);
+    expect(relevantControls(sized(), "png").fit).toBe(true);
   });
 
   it("空白だけの入力は「指定なし」として扱う", () => {
-    expect(relevantControls({ ...base, width: " ", height: " " }, ["png"]).fit).toBe(false);
+    expect(relevantControls({ ...base, width: " ", height: " " }, "png").fit).toBe(false);
   });
 });
 
 describe("寄せる位置（gravity）", () => {
   it("cover と contain では効き、fill では効かない", () => {
-    expect(relevantControls(sized({ fit: "cover" }), ["png"]).gravity).toBe(true);
-    expect(relevantControls(sized({ fit: "contain" }), ["png"]).gravity).toBe(true);
-    expect(relevantControls(sized({ fit: "fill" }), ["png"]).gravity).toBe(false);
+    expect(relevantControls(sized({ fit: "cover" }), "png").gravity).toBe(true);
+    expect(relevantControls(sized({ fit: "contain" }), "png").gravity).toBe(true);
+    expect(relevantControls(sized({ fit: "fill" }), "png").gravity).toBe(false);
   });
 
   it("寸法が片方だけなら fit 自体が効かないので、gravity も出さない", () => {
-    expect(relevantControls({ ...base, width: "800", fit: "cover" }, ["png"]).gravity).toBe(false);
+    expect(relevantControls({ ...base, width: "800", fit: "cover" }, "png").gravity).toBe(false);
   });
 });
 
 describe("背景色（background）", () => {
   it("contain のときだけ効く（余白を埋めるのが唯一の用途）", () => {
-    expect(relevantControls(sized({ fit: "contain" }), ["png"]).background).toBe(true);
-    expect(relevantControls(sized({ fit: "cover" }), ["png"]).background).toBe(false);
-    expect(relevantControls(sized({ fit: "fill" }), ["png"]).background).toBe(false);
-    expect(relevantControls({ ...base, fit: "contain" }, ["png"]).background).toBe(false);
+    expect(relevantControls(sized({ fit: "contain" }), "png").background).toBe(true);
+    expect(relevantControls(sized({ fit: "cover" }), "png").background).toBe(false);
+    expect(relevantControls(sized({ fit: "fill" }), "png").background).toBe(false);
+    expect(relevantControls({ ...base, fit: "contain" }, "png").background).toBe(false);
   });
 
   it("原寸が分かれば「余白が出ない contain」も出さない", () => {
     // 400×400 を 400×400 に収める＝縮小も余白も起きない ⇒ 塗る場所が無い。
     const opts = { width: "400", height: "400", fit: "contain" as const, format: "" };
-    expect(relevantControls(opts, ["png"], [{ width: 400, height: 400 }]).background).toBe(false);
+    expect(relevantControls(opts, "png", { width: 400, height: 400 }).background).toBe(false);
     // 縦横比が違えば余白は出る。
-    expect(relevantControls(opts, ["png"], [{ width: 800, height: 200 }]).background).toBe(true);
+    expect(relevantControls(opts, "png", { width: 800, height: 200 }).background).toBe(true);
   });
 });
 
 describe("原寸が分かるときは計画から答える", () => {
-  const square = [{ width: 400, height: 400 }];
+  const square = { width: 400, height: 400 };
 
   it("縦横比が同じ切り抜きは、寄せる位置ごと出さない", () => {
     const opts = { width: "200", height: "200", fit: "cover" as const, format: "" };
-    const r = relevantControls(opts, ["png"], square);
+    const r = relevantControls(opts, "png", square);
     expect(r.gravity).toBe(false);
     expect(r.axes).toEqual({ x: false, y: false });
   });
 
   it("正方形を横長に切り抜くなら、効く軸は上下だけ", () => {
     const opts = { width: "200", height: "100", fit: "cover" as const, format: "" };
-    const r = relevantControls(opts, ["png"], square);
+    const r = relevantControls(opts, "png", square);
     expect(r.gravity).toBe(true);
     expect(r.axes).toEqual({ x: false, y: true });
   });
 
   it("原寸が分からないうちは、効かないと証明できないので隠さない", () => {
     const opts = { width: "200", height: "100", fit: "cover" as const, format: "" };
-    expect(relevantControls(opts, ["png"]).axes).toEqual({ x: true, y: true });
-    expect(relevantControls(opts, ["png"], [{ width: 0, height: 0 }]).axes).toEqual({
+    expect(relevantControls(opts, "png").axes).toEqual({ x: true, y: true });
+    expect(relevantControls(opts, "png", { width: 0, height: 0 }).axes).toEqual({
       x: true,
       y: true,
     });
@@ -96,38 +98,38 @@ describe("原寸が分かるときは計画から答える", () => {
 
 describe("寸法欄の読み取りは parseDim が正本", () => {
   it("0 や整数でない値は「指定なし」として扱う（合わせ方も出ない）", () => {
-    expect(relevantControls({ ...base, width: "0", height: "100" }, []).fit).toBe(false);
-    expect(relevantControls({ ...base, width: "1.5", height: "100" }, []).fit).toBe(false);
-    expect(relevantControls({ ...base, width: "abc", height: "100" }, []).fit).toBe(false);
-    expect(relevantControls({ ...base, width: "1", height: "100" }, []).fit).toBe(true);
+    expect(relevantControls({ ...base, width: "0", height: "100" }, "").fit).toBe(false);
+    expect(relevantControls({ ...base, width: "1.5", height: "100" }, "").fit).toBe(false);
+    expect(relevantControls({ ...base, width: "abc", height: "100" }, "").fit).toBe(false);
+    expect(relevantControls({ ...base, width: "1", height: "100" }, "").fit).toBe(true);
   });
 });
 
 describe("画質（quality）", () => {
   it("Q を受け取る形式でだけ効く", () => {
     for (const f of ["jpg", "webp", "avif", "jxl"]) {
-      expect(relevantControls({ ...base, format: f }, ["png"]).quality, f).toBe(true);
+      expect(relevantControls({ ...base, format: f }, "png").quality, f).toBe(true);
     }
     for (const f of ["png", "tiff", "gif", "ppm"]) {
-      expect(relevantControls({ ...base, format: f }, ["jpg"]).quality, f).toBe(false);
+      expect(relevantControls({ ...base, format: f }, "jpg").quality, f).toBe(false);
     }
   });
 
   it("別名で書かれた形式も正規化して判定する", () => {
-    expect(relevantControls({ ...base, format: "jpeg" }, []).quality).toBe(true);
-    expect(relevantControls({ ...base, format: "tif" }, []).quality).toBe(false);
+    expect(relevantControls({ ...base, format: "jpeg" }, "").quality).toBe(true);
+    expect(relevantControls({ ...base, format: "tif" }, "").quality).toBe(false);
   });
 
-  it("「入力と同じ」なら、入力のどれか 1 つでも Q を取れば出す", () => {
-    expect(relevantControls(base, ["png", "gif"]).quality).toBe(false);
-    expect(relevantControls(base, ["png", "jpeg"]).quality).toBe(true);
-    expect(relevantControls(base, []).quality).toBe(false);
+  it("「入力と同じ」なら入力の形式で判定する", () => {
+    expect(relevantControls(base, "gif").quality).toBe(false);
+    expect(relevantControls(base, "jpeg").quality).toBe(true);
+    expect(relevantControls(base, "").quality).toBe(false);
   });
 
-  it("「入力と同じ」でも、書き出せない形式は数えない（その件は必ず失敗するため）", () => {
+  it("「入力と同じ」でも、書き出せない形式なら出さない（その指定は必ず失敗するため）", () => {
     // heic も svg も libvips では書けない ⇒ 出力形式が入力と同じなら画質を出す理由がない。
-    expect(relevantControls(base, ["heic", "svg"]).quality).toBe(false);
-    expect(relevantControls(base, ["heic", "jpg"]).quality).toBe(true);
+    expect(relevantControls(base, "heic").quality).toBe(false);
+    expect(relevantControls(base, "svg").quality).toBe(false);
   });
 });
 
@@ -203,77 +205,10 @@ describe("gravity の成分", () => {
   });
 });
 
-describe("バッチ全体で判断する（代表 1 枚で隠さない）", () => {
-  const opts = { width: "200", height: "200", fit: "cover" as const, format: "" };
-
-  it("代表に切り取りが無くても、他の 1 枚に起きるなら寄せる位置を出す", () => {
-    // 正方形（切り取り無し）+ 横長（左右を切る）。設定はバッチ全体に掛かるので隠してはいけない。
-    const r = relevantControls(
-      opts,
-      ["png"],
-      [
-        { width: 400, height: 400 },
-        { width: 800, height: 400 },
-      ],
-    );
-    expect(r.gravity).toBe(true);
-    expect(r.axes).toEqual({ x: true, y: false });
-  });
-
-  it("全員に切り取りが無いときだけ隠す", () => {
-    const r = relevantControls(
-      opts,
-      ["png"],
-      [
-        { width: 400, height: 400 },
-        { width: 800, height: 800 },
-      ],
-    );
-    expect(r.gravity).toBe(false);
-  });
-
-  it("1 枚でも原寸が分からなければ何も隠さない", () => {
-    const r = relevantControls(
-      opts,
-      ["png"],
-      [
-        { width: 400, height: 400 },
-        { width: 0, height: 0 },
-      ],
-    );
-    expect(r.axes).toEqual({ x: true, y: true });
-    expect(r.gravity).toBe(true);
-  });
-
-  it("収めるは、誰か 1 人でも余白が出れば背景色を出す", () => {
-    const contain = { ...opts, fit: "contain" as const };
-    expect(
-      relevantControls(
-        contain,
-        ["png"],
-        [
-          { width: 400, height: 400 },
-          { width: 800, height: 400 },
-        ],
-      ).background,
-    ).toBe(true);
-    expect(
-      relevantControls(
-        contain,
-        ["png"],
-        [
-          { width: 400, height: 400 },
-          { width: 800, height: 800 },
-        ],
-      ).background,
-    ).toBe(false);
-  });
-});
-
 describe("よく使う幅の早押し（presetWidths）", () => {
-  const w = (...widths: number[]): { width: number }[] => widths.map((width) => ({ width }));
+  const w = (width: number): { width: number } => ({ width });
 
-  it("一番大きい原寸より小さい幅だけを返す", () => {
+  it("原寸より小さい幅だけを返す", () => {
     expect(presetWidths(w(6000))).toEqual(PRESET_WIDTHS);
     expect(presetWidths(w(1000))).toEqual([828, 750, 640, 384]);
   });
@@ -282,14 +217,33 @@ describe("よく使う幅の早押し（presetWidths）", () => {
     expect(presetWidths(w(1920))[0]).toBe(1200);
   });
 
-  it("バッチでは一番大きい 1 枚が基準（1 枚でも縮むなら選ぶ意味がある）", () => {
-    // 一番小さい 500 を基準にすると 384 しか残らない。大きい方で判断していることを見る。
-    expect(presetWidths(w(500, 1000, 800))).toEqual([828, 750, 640, 384]);
-  });
-
   it("階段より小さい画像や、原寸が分からないうちは何も出さない", () => {
     expect(presetWidths(w(384))).toEqual([]);
-    expect(presetWidths([])).toEqual([]);
+    expect(presetWidths(w(0))).toEqual([]);
     expect(presetWidths(null)).toEqual([]);
+  });
+});
+
+describe("読めるが書けない形式は、押す前に理由を出す", () => {
+  // 1 枚しか扱わないので、判定は `cannotWriteReason` 1 つに寄っている
+  // （バッチだった頃の `validate` は「全件が駄目なときだけ止める」役だった）。
+  const opts = (patch: Partial<ConvertOptions> = {}): ConvertOptions => ({
+    width: 100,
+    height: 100,
+    fit: "cover",
+    gravity: "center",
+    background: null,
+    format: null,
+    quality: 80,
+    forceReencode: false,
+    ...patch,
+  });
+
+  it("heic のまま出そうとすると理由を返す（wasm-vips は heic を書けない）", () => {
+    expect(cannotWriteReason(opts(), "heic")).toMatch(/書き出せません/);
+  });
+
+  it("出力形式を指定すれば通る", () => {
+    expect(cannotWriteReason(opts({ format: "jpg" }), "heic")).toBeNull();
   });
 });

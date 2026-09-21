@@ -1,25 +1,20 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Images } from "lucide-react";
+import { useCallback, useEffect, useRef } from "react";
+import { Image as ImageIcon } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { DropZone } from "@/components/DropZone";
-import { walkImages } from "@/lib/fsaccess";
 import { extFromMime } from "@/lib/convertControls";
-import { isConvertibleImage, uniquePath } from "@/lib/imagePaths";
-import type { ConvertSource } from "@/lib/convert";
+import { isConvertibleImage } from "@/lib/imagePaths";
 import { useConvertStore } from "@/lib/stores/convertStore";
 
 // 画像を受け取る口。**受け取り方は 3 つとも同じ入口に集める**: ドロップ・貼り付け・選択。
 //
-// フォルダを選ぶボタンは置かない —— 変換したいのは画像であってフォルダではない。
-// ただしフォルダごと**ドロップ**すれば中の画像を拾う（`dataTransfer.items` から
-// ディレクトリ handle を取る。`dataTransfer.files` はフォルダを中身の無い項目として渡してくる）。
-// handle が取れた場合だけ入力ルートが分かるので、出力先の重なり検査（SPEC §5.4）もそこで効く。
+// **扱うのは 1 枚だけ**なので、2 枚以上とフォルダは**受け取らずに断る**。
+// 「最初の 1 枚を使う」にはしない —— 40 枚渡して 1 枚だけ変換されるのは、
+// 黙って選ばれた 1 枚が何なのか分からないままになる。
 
 export function ConvertPicker() {
-  const setSources = useConvertStore((s) => s.setSources);
-  const setInputRoot = useConvertStore((s) => s.setInputRoot);
-  const [reading, setReading] = useState(false);
+  const setSource = useConvertStore((s) => s.setSource);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const takeFiles = useCallback(
@@ -36,52 +31,24 @@ export function ConvertPicker() {
         if (files.length > 0) toast.error("画像が見つかりませんでした");
         return;
       }
-      setInputRoot(null); // File[] 経路には入力フォルダが無い。
-      // 別フォルダの同名が衝突し得る。scan と同じく連番で取りこぼさない。
-      const used = new Set<string>();
-      setSources(
-        imgs.map((f): ConvertSource => {
-          const path = uniquePath(f.name, used);
-          used.add(path);
-          return { path, bytes: () => f.arrayBuffer() };
-        }),
-      );
-    },
-    [setSources, setInputRoot],
-  );
-
-  /** フォルダの handle から中の画像を集める（構造を保って出力するため入力ルートも覚える）。 */
-  const takeDirectory = useCallback(
-    async (root: FileSystemDirectoryHandle) => {
-      setReading(true);
-      try {
-        const found = await walkImages(root, (name) => isConvertibleImage(name));
-        if (found.length === 0) {
-          toast.error("このフォルダに画像が見つかりませんでした");
-          return;
-        }
-        setInputRoot(root);
-        setSources(
-          found.map(
-            (f): ConvertSource => ({
-              path: f.path,
-              bytes: async () => (await f.handle.getFile()).arrayBuffer(),
-            }),
-          ),
-        );
-      } finally {
-        setReading(false);
+      if (imgs.length > 1) {
+        toast.error("1 枚だけ渡してください", {
+          description: "この画面は 1 枚ずつ変換します。",
+        });
+        return;
       }
+      const file = imgs[0];
+      setSource({ path: file.name, bytes: () => file.arrayBuffer() });
     },
-    [setSources, setInputRoot],
+    [setSource],
   );
 
-  /** ドロップ。フォルダが混ざっていれば handle として扱い、それ以外はファイルとして扱う。 */
+  /** ドロップ。フォルダが混ざっていたら受け取らない。 */
   const onDrop = useCallback(
     (data: DataTransfer) => {
       const items = Array.from(data.items);
       // getAsFileSystemHandle は Chromium 系のみ。**同期のうちに呼ぶ**（await を挟むと
-      // DataTransferItem が無効化される）。
+      // DataTransferItem が無効化される）。フォルダかどうかを見るためだけに使う。
       const handles = items
         .filter((i) => i.kind === "file")
         .map(
@@ -91,15 +58,16 @@ export function ConvertPicker() {
       const files = Array.from(data.files);
       void (async () => {
         const resolved = await Promise.all(handles);
-        const dir = resolved.find((h) => h?.kind === "directory");
-        if (dir) {
-          await takeDirectory(dir as FileSystemDirectoryHandle);
+        if (resolved.some((h) => h?.kind === "directory")) {
+          toast.error("フォルダは受け取れません", {
+            description: "画像 1 枚をそのまま渡してください。",
+          });
           return;
         }
         takeFiles(files);
       })();
     },
-    [takeDirectory, takeFiles],
+    [takeFiles],
   );
 
   // 貼り付け（スクリーンショットをそのまま変換できるように）。画像を選ぶ前だけ効く。
@@ -119,7 +87,6 @@ export function ConvertPicker() {
       <input
         ref={inputRef}
         type="file"
-        multiple
         accept="image/*"
         hidden
         onChange={(e) => {
@@ -128,13 +95,13 @@ export function ConvertPicker() {
         }}
       />
       <DropZone
-        icon={<Images className="size-6" />}
-        title="画像をドロップ、貼り付け、または選択"
+        icon={<ImageIcon className="size-6" />}
+        title="画像 1 枚をドロップ、貼り付け、または選択"
         onDrop={onDrop}
       >
-        <Button onClick={() => inputRef.current?.click()} disabled={reading} className="gap-1.5">
-          <Images className="size-4" />
-          {reading ? "読み込み中…" : "画像を選ぶ"}
+        <Button onClick={() => inputRef.current?.click()} className="gap-1.5">
+          <ImageIcon className="size-4" />
+          画像を選ぶ
         </Button>
       </DropZone>
     </>

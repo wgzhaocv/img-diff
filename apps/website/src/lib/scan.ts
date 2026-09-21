@@ -2,6 +2,7 @@ import type { ImageRecord } from "schema";
 import type { HashResult, PixelResult } from "@/lib/hashTypes";
 import { HashPool } from "@/lib/workerPool";
 import { gcOrphans, getRootHashes, HASH_ALGO, putHash, putThumb, type HashEntry } from "@/lib/db";
+import { webpBlob } from "@/lib/convertControls";
 import { resolveRoot, walkImages } from "@/lib/fsaccess";
 import { compareCodepoint, extOf, isScannableImage, uniquePath } from "@/lib/imagePaths";
 
@@ -35,10 +36,6 @@ export type ScanResult = {
   /** File[] 経路のサムネ（path → webp Blob・メモリ保持）。FS Access は IDB thumbs から引く。 */
   thumbByPath?: Map<string, Blob>;
 };
-
-function webpBlob(bytes: Uint8Array<ArrayBuffer>): Blob {
-  return new Blob([bytes], { type: "image/webp" });
-}
 
 function entryToRecord(e: HashEntry): ImageRecord {
   return {

@@ -3,13 +3,12 @@ import { getRoots, putRoot, requestPersistentStorage, type RootEntry } from "@/l
 // File System Access API（Chromium 限定）。フォルダの永続ハンドルで再スキャン高速化・中断再開を成立させる。
 // 非対応ブラウザは呼び出し側が File[] フォールバックへ（DESIGN §6）。
 
-// lib.dom に無い版があるため showDirectoryPicker / showSaveFilePicker を最小宣言。
+// lib.dom に無い版があるため showDirectoryPicker を最小宣言。
 declare global {
   interface Window {
     showDirectoryPicker?: (opts?: {
       mode?: "read" | "readwrite";
     }) => Promise<FileSystemDirectoryHandle>;
-    showSaveFilePicker?: (opts?: { suggestedName?: string }) => Promise<FileSystemFileHandle>;
   }
   /**
    * ドロップされた項目から handle を取る（Chromium 系のみ）。lib.dom の型に無い。
@@ -75,38 +74,16 @@ function safeSegments(path: string, what: string): string[] {
 }
 
 /// フォルダを選ばせて永続ハンドルを得る（**ユーザー操作内**で呼ぶ）。
-/// スキャンは read のみ。convert の出力先だけ readwrite で開く（入力フォルダには一切書かない）。
-export async function pickDirectory(
-  mode: "read" | "readwrite" = "read",
-): Promise<FileSystemDirectoryHandle | null> {
+/// **read のみ。** この app がフォルダへ書く経路は無い（削除は `removeByPath` が
+/// 別途 readwrite を要求する）。
+export async function pickDirectory(): Promise<FileSystemDirectoryHandle | null> {
   if (!window.showDirectoryPicker) return null;
   try {
-    return await window.showDirectoryPicker({ mode });
+    return await window.showDirectoryPicker({ mode: "read" });
   } catch (e) {
     // ユーザーがキャンセル（AbortError）した等は null。
     if (e instanceof DOMException && e.name === "AbortError") return null;
     throw e;
-  }
-}
-
-/**
- * `inner` が `outer` と同じか、**その配下か**。入力フォルダへ書き戻さないための検査。
- *
- * 同一性（`isSameEntry`）だけでは足りない —— 入力が `写真/` で出力に `写真/out/` を選ばれると
- * すり抜けて、上書きを許可した状態で元画像が置き換わる。`resolve` は相手が配下なら
- * ルートからの相対パスを返すので、入れ子もこれ 1 つで捕まる。
- * **判定できない環境では「危ないかもしれない」側へ倒す**（fail-closed）。
- */
-export async function isInsideDirectory(
-  outer: FileSystemDirectoryHandle,
-  inner: FileSystemDirectoryHandle,
-): Promise<boolean> {
-  try {
-    if (outer.isSameEntry && (await outer.isSameEntry(inner))) return true;
-    if (!outer.resolve) return true; // 判定手段が無い
-    return (await outer.resolve(inner)) !== null;
-  } catch {
-    return true;
   }
 }
 
@@ -152,63 +129,4 @@ export async function walkImages(
   }
   await recurse(dir, "");
   return out;
-}
-
-/// 出力先に 1 ファイル書く（convert・SPEC §5.4 の非破壊規則）。
-/// - 途中のディレクトリは作る（入力ルートからの相対構造を保つため）。
-/// - **既に在れば書かずに `"skipped"`。`overwrite` を明示したときだけ上書きする。**
-/// - パスは removeByPath と同じ fail-closed 検査を通す。
-/// 呼び出し側が readwrite 権限を取得済みである前提。
-export async function writeFileAt(
-  root: FileSystemDirectoryHandle,
-  path: string,
-  data: Uint8Array<ArrayBuffer>,
-  overwrite: boolean,
-): Promise<"written" | "skipped"> {
-  const segments = safeSegments(path, "書き出し先");
-  let dir = root;
-  for (let i = 0; i < segments.length - 1; i++) {
-    dir = await dir.getDirectoryHandle(segments[i], { create: true });
-  }
-  const name = segments[segments.length - 1];
-  if (!overwrite && (await exists(dir, name))) return "skipped";
-  const handle = await dir.getFileHandle(name, { create: true });
-  const w = await handle.createWritable();
-  try {
-    await w.write(data);
-  } finally {
-    await w.close();
-  }
-  return "written";
-}
-
-/// そのディレクトリに同名のファイルが在るか。NotFoundError 以外は呼び出し側へ投げる
-/// （権限切れ等を「無い」と誤認して上書きしないため）。
-async function exists(dir: FileSystemDirectoryHandle, name: string): Promise<boolean> {
-  try {
-    await dir.getFileHandle(name);
-    return true;
-  } catch (e) {
-    if (e instanceof DOMException && e.name === "NotFoundError") return false;
-    throw e;
-  }
-}
-
-/// 保存先ファイルを選ばせた結果。**「非対応だから退避する」と「利用者がやめた」を混ぜない**
-/// （混ぜると、キャンセルしたのに変換が走ってダウンロードが始まる）。
-export type SavePick =
-  | { kind: "stream"; writable: FileSystemWritableFileStream }
-  | { kind: "unsupported" }
-  | { kind: "cancelled" };
-
-/// 保存先ファイルを選ばせる（**ユーザー操作内**で呼ぶ）。zip を流し込む先に使う。
-export async function pickSaveFile(suggestedName: string): Promise<SavePick> {
-  if (!window.showSaveFilePicker) return { kind: "unsupported" };
-  try {
-    const handle = await window.showSaveFilePicker({ suggestedName });
-    return { kind: "stream", writable: await handle.createWritable() };
-  } catch (e) {
-    if (e instanceof DOMException && e.name === "AbortError") return { kind: "cancelled" };
-    throw e; // 権限エラー等は呼び出し側へ（黙って退避すると原因が消える）
-  }
 }

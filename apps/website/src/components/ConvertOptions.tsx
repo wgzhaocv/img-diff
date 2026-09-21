@@ -24,13 +24,13 @@ import {
 import { parseDim } from "@/lib/convertPlan";
 import { cn } from "@/lib/utils";
 import { extOf } from "@/lib/imagePaths";
-import { DEFAULT_FORM, representativePath, useConvertStore } from "@/lib/stores/convertStore";
+import { DEFAULT_FORM, useConvertStore } from "@/lib/stores/convertStore";
 
 // 変換パラメータのフォーム（SPEC §5.4 の 7 引数）。規範は UI.md §6.1。
 // 値はストアが持つので、この部品は表示と入力だけを受け持つ。
 //
-// 購読するのは `form` と `sources` だけ（どちらも利用者の操作でしか変わらない）。
-// サムネの到着で毎回描き直さないよう、原寸に関わる部分は別部品（SizePresets）に切ってある。
+// **どの欄が在るかは原寸に依る**ので、原寸が届いたときはこの部品ごと描き直る（1 枚につき 1 回）。
+// 早押しの値だけは別部品（SizePresets）に切って、寸法欄の打鍵で網格まで巻き込まないようにしている。
 //
 // **今の指定で効かない欄は描かない**（UI.md §6.1）。どれが効くかの判定は
 // `lib/convertControls.ts` に集約してあり、ここでは真偽値を見るだけにする。
@@ -57,28 +57,12 @@ const GRAVITY_LABEL: Record<ConvertGravity, string> = {
 export function ConvertOptions() {
   const form = useConvertStore((s) => s.form);
   const setForm = useConvertStore((s) => s.setForm);
-  const sources = useConvertStore((s) => s.sources);
-  const disabled = useConvertStore((s) => s.status === "converting");
-  const sourceInfo = useConvertStore((s) => s.sourceInfo);
+  const srcPath = useConvertStore((s) => s.source?.path);
+  const info = useConvertStore((s) => s.info);
 
-  // 入力にある拡張子の集合。「入力と同じ形式」のときに画質が効くかの判定に要る。
-  const srcFormats = useMemo(() => [...new Set(sources.map((s) => extOf(s.path)))], [sources]);
-  // 原寸の集計は**1 回の走査で済ませる**。`sourceInfo` はサムネ 1 枚ごとに作り直されるので
-  // （N 枚で N 回）、ここを 2 周すると N² 回の引きになる。
-  //
-  // 2 つの答えを出す。`known` は**取れているぶん**、`all` は**全部揃っているときだけ**。
-  // 早押しの幅は取れているぶんから出してよいが、控件を隠す判断は全部揃うまで待つ ——
-  // 設定はバッチ全体に掛かるので、代表 1 枚だけで隠すと他の画像を黙って切り落とし得る。
-  const { known, all } = useMemo(() => {
-    const infos = sources.map((s) => sourceInfo.get(s.path));
-    const known = infos.flatMap((i) =>
-      i != null && i.width > 0 ? [{ width: i.width, height: i.height }] : [],
-    );
-    return { known, all: known.length === infos.length ? known : null };
-  }, [sources, sourceInfo]);
   // **どの欄を出すかの答えはここ 1 回だけ出す**（子には真偽値だけ渡す）。
-  const show = useMemo(() => relevantControls(form, srcFormats, all), [form, srcFormats, all]);
-  const presets = useMemo(() => presetWidths(known), [known]);
+  const show = relevantControls(form, srcPath == null ? "" : extOf(srcPath), info);
+  const presets = presetWidths(info);
 
   // 画質の欄が出ていないなら「画質を指定した」も取り消す —— 見えない設定が
   // 素通し（SPEC §5.4 規則 4）を止めて、無意味な再符号化をさせないように。
@@ -91,7 +75,7 @@ export function ConvertOptions() {
 
   return (
     <div className="space-y-6">
-      <fieldset className="space-y-3" disabled={disabled}>
+      <fieldset className="space-y-3">
         <legend className="text-sm font-medium">寸法</legend>
         <div className="flex flex-wrap items-end gap-3">
           <div className="space-y-2">
@@ -126,7 +110,7 @@ export function ConvertOptions() {
       </fieldset>
 
       {show.fit ? (
-        <fieldset className="space-y-3" disabled={disabled}>
+        <fieldset className="space-y-3">
           <legend className="text-sm font-medium">合わせ方</legend>
           <Tabs value={form.fit} onValueChange={(v) => setForm({ fit: v as ConvertFit })}>
             <TabsList>
@@ -140,11 +124,11 @@ export function ConvertOptions() {
         </fieldset>
       ) : null}
 
-      {show.gravity ? <GravityPad disabled={disabled} axes={show.axes} /> : null}
+      {show.gravity ? <GravityPad axes={show.axes} /> : null}
 
-      {show.background ? <BackgroundField disabled={disabled} /> : null}
+      {show.background ? <BackgroundField /> : null}
 
-      <fieldset className="space-y-3" disabled={disabled}>
+      <fieldset className="space-y-3">
         <legend className="text-sm font-medium">出力形式</legend>
         <Select
           value={form.format}
@@ -165,7 +149,7 @@ export function ConvertOptions() {
       </fieldset>
 
       {show.quality ? (
-        <fieldset className="space-y-3" disabled={disabled}>
+        <fieldset className="space-y-3">
           <legend className="text-sm font-medium">画質</legend>
           <div className="max-w-sm space-y-2">
             <Label htmlFor="cv-q">
@@ -199,9 +183,7 @@ export function ConvertOptions() {
  * 原寸の数値は文字で出さない: プレビューの「変換前」が同じ数字を出している（UI.md §6.1）。
  */
 function SizePresets({ presets }: { presets: number[] }) {
-  const first = useConvertStore(representativePath);
-  const info = useConvertStore((s) => (first == null ? undefined : s.sourceInfo.get(first)));
-  const multiple = useConvertStore((s) => s.sources.length > 1);
+  const info = useConvertStore((s) => s.info);
   const width = useConvertStore((s) => s.form.width);
   const height = useConvertStore((s) => s.form.height);
   const setForm = useConvertStore((s) => s.setForm);
@@ -214,10 +196,7 @@ function SizePresets({ presets }: { presets: number[] }) {
       {
         key: "original",
         label: "原寸",
-        // 代表 1 枚の寸法をバッチ全体へ入れる値なので、どの画像の原寸かを言っておく。
-        hint: multiple
-          ? `プレビューに使っている画像の原寸 ${info.width}×${info.height}`
-          : `${info.width}×${info.height}`,
+        hint: `${info.width}×${info.height}`,
         selected: width === String(info.width) && height === String(info.height),
         patch: { width: String(info.width), height: String(info.height) },
         extra: "",
@@ -231,7 +210,7 @@ function SizePresets({ presets }: { presets: number[] }) {
         extra: "num",
       })),
     ];
-  }, [info, multiple, presets, width, height]);
+  }, [info, presets, width, height]);
 
   if (choices.length === 0) return null;
   return (
@@ -272,11 +251,11 @@ function chipClass(selected: boolean, extra: string): string {
 /**
  * 背景色。出すかどうか（＝余白が本当に出るか）は `relevantControls` が決める。
  */
-function BackgroundField({ disabled }: { disabled: boolean }) {
+function BackgroundField() {
   const background = useConvertStore((s) => s.form.background);
   const setForm = useConvertStore((s) => s.setForm);
   return (
-    <fieldset className="space-y-3" disabled={disabled}>
+    <fieldset className="space-y-3">
       <legend className="text-sm font-medium">背景色</legend>
       <div className="space-y-2">
         <Input
@@ -297,13 +276,13 @@ function BackgroundField({ disabled }: { disabled: boolean }) {
  * （正方形を横長に切り抜くなら上下だけが効き、左右を変えても出力は 1 ピクセルも変わらない）。
  * 置かない枠には空きマスを入れる＝ 9 マスの形は保つ: 形が崩れると、どれがどの向きなのか分からなくなる。
  */
-function GravityPad({ disabled, axes }: { disabled: boolean; axes: ControlRelevance["axes"] }) {
+function GravityPad({ axes }: { axes: ControlRelevance["axes"] }) {
   const gravity = useConvertStore((s) => s.form.gravity);
   const setForm = useConvertStore((s) => s.setForm);
   // 効かない軸の成分を落とした同義の値を選択中として見せる（出力は完全に同じ）。
   const selected = projectGravity(gravity, axes);
   return (
-    <fieldset className="space-y-3" disabled={disabled}>
+    <fieldset className="space-y-3">
       <legend className="text-sm font-medium">寄せる位置</legend>
       <div className="grid w-fit grid-cols-3 gap-2" role="radiogroup" aria-label="寄せる位置">
         {GRAVITY_VALUES.map((g) =>

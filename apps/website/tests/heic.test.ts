@@ -102,7 +102,7 @@ describe("HEVC の HEIC（wasm-vips では読めない形式）", () => {
   });
 
   it("出力形式を指定しないと書けない（読めても書けるようにはならない）", () => {
-    // heic は書けない形式。画面は実行前にこれを弾く（convertStore の validate）。
+    // heic は書けない形式。画面は押す前にこれを弾く（`cannotWriteReason`）。
     expect(() => applyConvert(vips, source, { ...defaults, width: 150 }, "heic")).toThrow();
   });
 

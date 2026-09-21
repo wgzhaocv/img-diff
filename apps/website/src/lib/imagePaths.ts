@@ -48,6 +48,17 @@ export function extOf(path: string): string {
   return dot > slash ? path.slice(dot + 1).toLowerCase() : "";
 }
 
+/**
+ * 拡張子を落とした残り（最後の `/` より後ろの `.` だけを見る）。
+ * **`extOf` と対**にしてある —— 切る位置が 2 箇所に分かれていると、
+ * `a.dir/photo` のような名前で片方だけが拡張子を見つける、が起きる。
+ */
+export function stemOf(path: string): string {
+  const dot = path.lastIndexOf(".");
+  const slash = path.lastIndexOf("/");
+  return dot > slash ? path.slice(0, dot) : path;
+}
+
 /** 表示用のファイル名（最後の `/` より後ろ）。path 自体は title / alt に使う。 */
 export function baseNameOf(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1);
@@ -70,9 +81,8 @@ export function isConvertibleImage(name: string): boolean {
  */
 export function uniquePath(base: string, used: Set<string>): string {
   if (!used.has(base)) return base;
-  const dot = base.lastIndexOf(".");
-  const stem = dot > 0 ? base.slice(0, dot) : base;
-  const ext = dot > 0 ? base.slice(dot) : "";
+  const stem = stemOf(base);
+  const ext = base.slice(stem.length); // "" か ".jpg"
   let n = 2;
   let key = `${stem} (${n})${ext}`;
   while (used.has(key)) key = `${stem} (${++n})${ext}`;
