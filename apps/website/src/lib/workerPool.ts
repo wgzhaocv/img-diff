@@ -129,9 +129,15 @@ export class HashPool {
 export function poolRef(size: number): PoolRef {
   let pool: HashPool | null = null;
   let holds = 0;
+  // **最後に使った時刻。** 畳むかどうかの猶予の基準（`releaseIdlePools`）。
+  let usedAt = 0;
   const ref: PoolRef = {
-    get: () => (pool ??= new HashPool(size)),
+    get: () => {
+      usedAt = Date.now();
+      return (pool ??= new HashPool(size));
+    },
     hold: () => {
+      usedAt = Date.now();
       holds += 1;
       let released = false;
       return () => {
@@ -141,6 +147,8 @@ export function poolRef(size: number): PoolRef {
       };
     },
     idle: () => holds === 0 && (pool == null || !pool.busy()),
+    live: () => pool != null,
+    usedAt: () => usedAt,
     reset: (reason?: string) => {
       pool?.terminate(reason);
       pool = null;
@@ -155,13 +163,16 @@ export type PoolRef = {
   /**
    * **この持ち手を使い終わるまで畳ませない。** 戻り値を呼ぶと解除する。
    *
-   * `HashPool.busy()` だけでは足りない —— 編排側はプールの実体を握ったまま
-   * `src.bytes()`（ファイル読み）や `sink.put()`（書き出し）を await するので、
-   * その間キューは空で「暇」に見える。実行の開始時点で全 runner が読み込み中、は普通に起きる。
+   * `HashPool.busy()` だけでは足りない —— 呼び出し側はプールの実体を握ったまま
+   * ファイル読みや wasm の初期化を await するので、その間キューは空で「暇」に見える。
    */
   hold: () => () => void;
   /** 起こしていない・何も抱えていない・誰も押さえていない。 */
   idle: () => boolean;
+  /** 実体を起こしてあるか（畳む対象が在るか）。 */
+  live: () => boolean;
+  /** 最後に `get()` / `hold()` した時刻（ms）。 */
+  usedAt: () => number;
   reset: (reason?: string) => void;
 };
 
@@ -169,18 +180,46 @@ export type PoolRef = {
 const allPools: PoolRef[] = [];
 
 /**
- * **今使っていないプールを畳む。** 機能ごとに持ち手が在るので、scan → compare → convert と
- * 触ると wasm-vips の実体が 3×N 個そのまま残る（8 コアなら outer 24・内部 pthread はさらにその数倍）。
- * 各実体は 1GiB の線形メモリを予約し、wasm のヒープは**縮まない**ので、放っておくと戻らない。
+ * 畳むまでの猶予。**画面を行き来しただけで温めた実体を捨てないため。**
  *
- * 呼ぶのは画面の切り替え時（`App.tsx`）。
+ * 即座に畳むと、convert → scan → convert と戻るたびに wasm-vips を作り直すことになる
+ * （バイトは HTTP キャッシュから来ても、コンパイルと 1GiB の予約は毎回払う）。
+ */
+const IDLE_GRACE_MS = 60_000;
+
+/** 予約済みの掃除（多重に張らない）。 */
+let sweepTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * **今使っていないプールを畳む。** 機能ごとに持ち手が在るので、scan → compare → convert と
+ * 触ると wasm-vips の実体が機能ごとに残る。各実体は 1GiB の線形メモリを予約し、
+ * wasm のヒープは**縮まない**ので、放っておくと戻らない。
+ *
+ * ただし**すぐには畳まない** —— 呼ぶのは画面の切り替え時（`App.tsx`）なので、
+ * 即座に畳むとタブを往復しただけで温めた実体が消える。`IDLE_GRACE_MS` 使われていない
+ * ものだけを畳み、まだ猶予の内に在る物や仕事中の物のために掃除を張り直す
+ * （さもないと「次の画面切り替えまで畳まれない」＝居座りになる）。
  */
 export function releaseIdlePools(): void {
+  if (sweepTimer != null) return;
+  sweepTimer = setTimeout(sweep, IDLE_GRACE_MS);
+}
+
+function sweep(): void {
+  sweepTimer = null;
+  let pending = false;
+  const now = Date.now();
   for (const ref of allPools) {
-    // **仕事中は畳まない。** 画面を切り替えても走っている変換は最後まで走らせる
-    // （`idle()` が走行中と順番待ちの両方を見る）。
-    if (ref.idle()) ref.reset();
+    if (!ref.live()) continue;
+    // **仕事中は畳まない**（`idle()` が走行中と順番待ちと `hold()` の全部を見る）。
+    // 猶予の内に使われた物も残す。どちらもまた見に来る必要が在る。
+    if (!ref.idle() || now - ref.usedAt() < IDLE_GRACE_MS) {
+      pending = true;
+      continue;
+    }
+    ref.reset();
   }
+  if (pending) sweepTimer = setTimeout(sweep, IDLE_GRACE_MS);
 }
 
 /// 既定のプール本数（DESIGN §4: min(hardwareConcurrency, 8)）。

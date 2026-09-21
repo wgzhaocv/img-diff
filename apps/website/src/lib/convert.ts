@@ -10,11 +10,14 @@ import { type HashPool } from "@/lib/workerPool";
 import { isPassThrough, normalizeOutFormat } from "@/lib/convertPlan";
 import { extOf, stemOf } from "@/lib/imagePaths";
 
-/** 変換対象（名前と、バイト列の取り方）。 */
+/**
+ * 変換対象。**中身は `Blob` のまま持つ**（読むのはワーカー側）——
+ * `Blob` は構造化複製で参照ごと運ばれるので、主線程はファイルを読まずに渡せる。
+ */
 export type ConvertSource = {
   /** 表示と出力名に使う名前。 */
   path: string;
-  bytes: () => Promise<ArrayBuffer>;
+  file: Blob;
 };
 
 /** 出力ファイル名（拡張子を出力形式へ差し替える）。形式を変えないなら元の名前のまま。 */
@@ -23,9 +26,10 @@ export function outPathFor(srcPath: string, outFormat: string | null): string {
   return `${stemOf(srcPath)}.${normalizeOutFormat(outFormat)}`;
 }
 
-/** 出力バイト列と寸法。素通し（デコードしない）のときは寸法が 0。 */
+/** 出力と寸法。素通し（デコードしない）のときは寸法が 0。 */
 type Output = {
-  data: Uint8Array<ArrayBuffer>;
+  /** 変換後の中身。**素通しでは元の `Blob` をそのまま切り出した物**（読みもコピーもしない）。 */
+  blob: Blob;
   width: number;
   height: number;
   vipsVersion?: string;
@@ -44,24 +48,25 @@ export async function convertSource(
   src: ConvertSource,
   options: ConvertOptions,
   pool: HashPool,
+  outMime: string,
 ): Promise<Output> {
-  const bytes = await src.bytes();
   if (isPassThrough(options, extOf(src.path))) {
+    // **1 バイトも読まない。** `slice` は中身を複製せず、型だけ付け替えた view を返す。
     // 寸法はデコードしないと分からないので 0（SPEC §5.4: 素通しした項目の約束）。
     return {
-      data: new Uint8Array(bytes) as Uint8Array<ArrayBuffer>,
+      blob: src.file.slice(0, src.file.size, outMime),
       width: 0,
       height: 0,
       passedThrough: true,
     };
   }
   const res = (await pool.submit(
-    { op: "convert", path: src.path, bytes, options, srcFormat: extOf(src.path) },
-    [bytes],
+    { op: "convert", path: src.path, blob: src.file, options, srcFormat: extOf(src.path) },
+    [],
   )) as ConvertResult;
   if (res.error != null || !res.out) throw new Error(res.error ?? "変換に失敗しました");
   return {
-    data: res.out,
+    blob: new Blob([res.out], { type: outMime }),
     width: res.width,
     height: res.height,
     vipsVersion: res.vipsVersion,

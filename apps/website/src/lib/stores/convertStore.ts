@@ -392,11 +392,9 @@ export const useConvertStore = create<ConvertState>()(
         infoGen = gen;
         const releaseHold = pool.hold();
         try {
-          const bytes = await src.bytes();
-          if (gen !== sourcesGen) return; // 選び直された: 読む前にやめる
           const res = (await pool
             .get()
-            .submit({ op: "info", path: src.path, bytes }, [bytes])) as InfoResult;
+            .submit({ op: "info", path: src.path, blob: src.file }, [])) as InfoResult;
           if (gen !== sourcesGen) return; // 選び直された後に返ってきた結果は捨てる
           set({
             info: {
@@ -462,18 +460,18 @@ export const useConvertStore = create<ConvertState>()(
         const releaseHold = pool.hold();
         set({ previewRendering: true, previewError: null });
         try {
-          const out = await convertSource(src, resolved.options, pool.get());
-          if (gen !== sourcesGen) return; // 選び直された後に返ってきた結果は捨てる
           const format = normalizeOutFormat(resolved.options.format ?? srcFormat);
+          const out = await convertSource(src, resolved.options, pool.get(), mimeOf(format));
+          if (gen !== sourcesGen) return; // 選び直された後に返ってきた結果は捨てる
           // 素通しは寸法を返さない（デコードしていない）ので、取得時の原寸を使う。
           const info = get().info;
           set({
             preview: {
               path: src.path,
-              blob: new Blob([out.data], { type: mimeOf(format) }),
+              blob: out.blob,
               width: out.passedThrough ? (info?.width ?? 0) : out.width,
               height: out.passedThrough ? (info?.height ?? 0) : out.height,
-              bytes: out.data.byteLength,
+              bytes: out.blob.size,
               format,
               passedThrough: out.passedThrough,
               key,
@@ -501,12 +499,11 @@ export const useConvertStore = create<ConvertState>()(
         if (!preview) throw new Error("プレビューがまだありません");
         if (preview.format === "png") return preview.blob;
         // 見えている結果そのものを包み直す（元画像から作り直すと、設定次第で別物になり得る）。
-        const bytes = await preview.blob.arrayBuffer();
         const res = (await pool.get().submit(
           {
             op: "convert",
             path: preview.path,
-            bytes,
+            blob: preview.blob,
             options: {
               width: null,
               height: null,
@@ -520,7 +517,7 @@ export const useConvertStore = create<ConvertState>()(
             },
             srcFormat: preview.format,
           },
-          [bytes],
+          [],
         )) as ConvertResult;
         if (res.error != null || !res.out) {
           throw new Error(res.error ?? "png に変換できませんでした");

@@ -38,7 +38,7 @@ export function ConvertPicker() {
         return;
       }
       const file = imgs[0];
-      setSource({ path: file.name, bytes: () => file.arrayBuffer() });
+      setSource({ path: file.name, file });
     },
     [setSource],
   );

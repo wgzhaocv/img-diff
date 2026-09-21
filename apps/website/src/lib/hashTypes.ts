@@ -13,14 +13,19 @@ import type { ConvertOptions } from "schema";
 // op="warm": **画像を渡さずに wasm-vips だけ起こす**。約 11.9MB のダウンロードとコンパイルを
 //   利用者が画像を選んでいる間に済ませてしまうための空リクエスト（DESIGN §7.2）。
 export type WorkerRequest =
-  | { op: "hash" | "pixel" | "decode" | "info"; path: string; bytes: ArrayBuffer }
-  | { op: "convert"; path: string; bytes: ArrayBuffer; options: ConvertOptions; srcFormat: string }
+  | { op: "hash" | "pixel" | "decode"; path: string; bytes: ArrayBuffer }
+  // **convert 系は `Blob` を渡す。** `Blob` は構造化複製で**参照ごと**運ばれるので、
+  // 主線程はファイルを 1 バイトも読まずに済む（読むのは実際に要るワーカー側）。
+  // 48MP の png は 1 回の読みで 100MB を超えるうえ、設定を触るたびに読み直すので、
+  // 主線程で読むと滑動の手応えごと落ちる。
+  | { op: "info"; path: string; blob: Blob }
+  | { op: "convert"; path: string; blob: Blob; options: ConvertOptions; srcFormat: string }
   | { op: "warm" };
 
 /**
- * **画像を 1 枚抱えているリクエスト。** `warm` を足したことで `WorkerRequest` 全体には
- * `path` / `bytes` が無くなったので、1 枚を処理する関数はこちらを受ける
- * （union 全体を受けて中で絞り直すより、受け取る形で言い切る方が読める）。
+ * **デコード済み画素が要る scan / compare 系のリクエスト**（`hash` / `pixel` / `decode`）。
+ * こちらは `ArrayBuffer` を transfer で渡す —— 呼び出し側が既に読んでいるので
+ * （scan は数千枚を有界並列で読み進める）、参照渡しの利点が無い。
  */
 export type ImageRequest = Extract<WorkerRequest, { bytes: ArrayBuffer }>;
 

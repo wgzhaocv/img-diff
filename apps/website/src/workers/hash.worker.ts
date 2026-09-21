@@ -136,7 +136,8 @@ async function decodeOne(req: ImageRequest): Promise<DecodeResult> {
 /// vips のハンドルを保ったまま resize/embed して符号化する。
 async function convertOne(req: Extract<WorkerRequest, { op: "convert" }>): Promise<ConvertResult> {
   try {
-    const r = await convertBuffer(req.bytes, req.options, req.srcFormat);
+    // **読むのはここ。** 主線程では読まない（`hashTypes.ts` の `op:"convert"` の説明）。
+    const r = await convertBuffer(await req.blob.arrayBuffer(), req.options, req.srcFormat);
     return {
       op: "convert",
       path: req.path,
@@ -175,10 +176,10 @@ async function warmOne(): Promise<WarmResult> {
 }
 
 /// 表示用の情報だけを返す（原寸 + サムネ）。ハッシュも全分解能 RGBA も作らない。
-async function infoOne(req: ImageRequest): Promise<InfoResult> {
-  const bytes = req.bytes.byteLength;
+async function infoOne(req: Extract<WorkerRequest, { op: "info" }>): Promise<InfoResult> {
+  const bytes = req.blob.size;
   try {
-    const { width, height, thumb } = await imageInfo(req.bytes, extOf(req.path));
+    const { width, height, thumb } = await imageInfo(await req.blob.arrayBuffer(), extOf(req.path));
     return { op: "info", path: req.path, width, height, bytes, thumb };
   } catch (e) {
     // 画素をデコードできない（web の HEVC な HEIC など）。呼び出し側は「読み込めません」と出す。

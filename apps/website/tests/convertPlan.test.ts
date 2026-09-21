@@ -486,7 +486,7 @@ describe("次に開いたときも残す設定", () => {
 });
 
 describe("プレビューは原寸が届いてから作る", () => {
-  const src = (path: string) => ({ path, bytes: () => Promise.resolve(new ArrayBuffer(0)) });
+  const src = (path: string) => ({ path, file: new Blob([]) });
   const info = { width: 1024, height: 1024, bytes: 1_700_000 };
 
   it("原寸が届くと鍵が変わる（＝先に始めた分は捨てるために符号化したことになる）", () => {
@@ -524,7 +524,7 @@ describe("プレビューは原寸が届いてから作る", () => {
 });
 
 describe("エンジンの先起こし", () => {
-  const src = (path: string) => ({ path, bytes: () => Promise.resolve(new ArrayBuffer(0)) });
+  const src = (path: string) => ({ path, file: new Blob([]) });
 
   it("cold から始まり、選び直しでも戻らない（wasm は使い回す）", () => {
     useConvertStore.getState().setSource(src("a.png"));
