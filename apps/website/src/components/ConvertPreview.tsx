@@ -1,7 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Copy, Download, Loader2 } from "lucide-react";
+import { Check, Copy, Download, Loader2, Maximize, Minimize } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { isBrowserRenderable } from "@/lib/convertControls";
 import { outPathFor } from "@/lib/convert";
 import { errText, formatBytes } from "@/lib/format";
@@ -30,6 +39,7 @@ const DEBOUNCE_MS = 300;
 export function ConvertPreview() {
   const previewAsPng = useConvertStore((s) => s.previewAsPng);
   const [copied, setCopied] = useState(false);
+  const [zoomed, setZoomed] = useState(false);
   const [copying, setCopying] = useState(false);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const path = useConvertStore((s) => s.source?.path);
@@ -137,11 +147,21 @@ export function ConvertPreview() {
         <figure className="space-y-1">
           <div className={cn(IMAGE_FRAME, "relative aspect-square")}>
             {afterUrl && renderable ? (
-              <img
-                src={afterUrl}
-                alt={`変換後: ${name}`}
-                className={cn("size-full object-contain", pictured !== shown && "opacity-50")}
-              />
+              // **絵そのものが拡大の入口。** 押せるのは今の結果が出ているときだけ
+              // （作り直している間の薄い絵を拡大しても、それは今の結果ではない）。
+              <button
+                type="button"
+                disabled={!ready}
+                onClick={() => setZoomed(true)}
+                aria-label={`拡大して見る: ${name}`}
+                className="size-full cursor-zoom-in disabled:cursor-default"
+              >
+                <img
+                  src={afterUrl}
+                  alt={`変換後: ${name}`}
+                  className={cn("size-full object-contain", pictured !== shown && "opacity-50")}
+                />
+              </button>
             ) : null}
             {/* 絵が無い間だけ。**理由が出ているときは出さない** ——
                 「書き出せません」の横で光っていたら、まだ作っているように見える。 */}
@@ -185,52 +205,189 @@ export function ConvertPreview() {
         </figure>
       </div>
 
-      {/* **ボタンは消さずに無効化する**（UI.md §6.1）。作り直している間に行だけ消えると
-          画面が跳ね、押そうとした手が空を切る。無効なリンクは押しても何も落ちない。 */}
-      <div className="flex flex-wrap items-center gap-2">
-        {/* **これが主操作。** 行き先はブラウザの既定のダウンロード先で、
-            保存ダイアログもフォルダ選択も出さない。
-            `href` を絵とは別の url から張るのは、`useObjectUrl` が effect で張り替える
-            ぶん、新しい結果が届いた最初の 1 フレームだけ絵と食い違うため
-            （そこで押すと「新しい名前で古い画像」が落ちる）。 */}
-        {/* **無効時は素の `button disabled` を描く。** `asChild` に `disabled` を渡すと
-            Radix Slot が子へ透過して `<span disabled="">` になり、無効な DOM のうえ
-            `:disabled` に当たらないので**見た目が押せるまま**になる。 */}
-        {ready ? (
-          <Button asChild>
-            <a href={savableUrl} download={outPathFor(name, shown.format)} className="gap-1.5">
-              <Download className="size-4" />
-              保存
-            </a>
-          </Button>
-        ) : (
-          <Button disabled className="gap-1.5">
+      <PreviewActions
+        ready={ready}
+        savableUrl={savableUrl}
+        fileName={ready ? outPathFor(name, shown.format) : ""}
+        format={shown?.format}
+        copying={copying}
+        copied={copied}
+        onCopy={() => void copyImage()}
+      />
+
+      {/* 押した絵を大きく見る。元の寸法で出すと画面から溢れるので枠に収め、
+       **全画面**だけは要求できるようにしておく（画素を確かめたいときのため）。 */}
+      <ZoomDialog
+        open={zoomed}
+        onOpenChange={setZoomed}
+        name={name}
+        url={ready ? savableUrl : null}
+        dims={shown ? `${shown.width}×${shown.height}` : ""}
+        actions={
+          <PreviewActions
+            ready={ready}
+            savableUrl={savableUrl}
+            fileName={ready ? outPathFor(name, shown.format) : ""}
+            format={shown?.format}
+            copying={copying}
+            copied={copied}
+            onCopy={() => void copyImage()}
+          />
+        }
+      />
+    </section>
+  );
+}
+
+/**
+ * 保存とコピーの 1 行。**プレビューの下と拡大ダイアログの中で同じ物を使う**
+ * （別々に書くと「ダイアログからだと違う名前で落ちる」類が生まれる）。
+ *
+ * **ボタンは消さずに無効化する**（UI.md §6.1）。作り直している間に行だけ消えると
+ * 画面が跳ね、押そうとした手が空を切る。
+ */
+function PreviewActions({
+  ready,
+  savableUrl,
+  fileName,
+  format,
+  copying,
+  copied,
+  onCopy,
+}: {
+  ready: boolean;
+  savableUrl: string | null;
+  fileName: string;
+  format: string | undefined;
+  copying: boolean;
+  copied: boolean;
+  onCopy: () => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {/* **これが主操作。** 行き先はブラウザの既定のダウンロード先で、
+          保存ダイアログもフォルダ選択も出さない。
+          **無効時は素の `button disabled` を描く** —— `asChild` に `disabled` を渡すと
+          Radix Slot が子へ透過して `<span disabled="">` になり、無効な DOM のうえ
+          `:disabled` に当たらないので見た目が押せるままになる。 */}
+      {ready && savableUrl ? (
+        <Button asChild>
+          <a href={savableUrl} download={fileName} className="gap-1.5">
             <Download className="size-4" />
             保存
-          </Button>
-        )}
-        <Button
-          variant="outline"
-          className="gap-1.5"
-          onClick={() => void copyImage()}
-          disabled={!ready || copying}
-          // 貼り付け先が欲しいのは絵であって形式ではない。ただし黙って替えない。
-          title={
-            shown?.format === "png"
-              ? undefined
-              : "クリップボードは png のみ受け取れます（画素はそのまま png で渡します）"
-          }
-        >
-          {copying ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : copied ? (
-            <Check className="size-4 text-primary" />
-          ) : (
-            <Copy className="size-4" />
-          )}
-          {copying ? "コピー中…" : "コピー"}
+          </a>
         </Button>
-      </div>
-    </section>
+      ) : (
+        <Button disabled className="gap-1.5">
+          <Download className="size-4" />
+          保存
+        </Button>
+      )}
+      <Button
+        variant="outline"
+        className="gap-1.5"
+        onClick={onCopy}
+        disabled={!ready || copying}
+        // 貼り付け先が欲しいのは絵であって形式ではない。ただし黙って替えない。
+        title={
+          format === "png"
+            ? undefined
+            : "クリップボードは png のみ受け取れます（画素はそのまま png で渡します）"
+        }
+      >
+        {copying ? (
+          <Loader2 className="size-4 animate-spin" />
+        ) : copied ? (
+          <Check className="size-4 text-primary" />
+        ) : (
+          <Copy className="size-4" />
+        )}
+        {copying ? "コピー中…" : "コピー"}
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * 変換後の絵を大きく見るダイアログ。
+ *
+ * **全画面は要求できるようにしておく** —— 画素を確かめたいときに枠の中では足りない。
+ * `requestFullscreen` は利用者の操作の中でしか通らないので、ボタンから直接呼ぶ。
+ * 実際に全画面かどうかは `document.fullscreenElement` を見張る（Esc で抜けられたり、
+ * OS 側から解除されることがあるので、自前の真偽値を信じない）。
+ */
+function ZoomDialog({
+  open,
+  onOpenChange,
+  name,
+  url,
+  dims,
+  actions,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  name: string;
+  url: string | null;
+  dims: string;
+  actions: React.ReactNode;
+}) {
+  const frame = useRef<HTMLDivElement>(null);
+  const [full, setFull] = useState(false);
+
+  useEffect(() => {
+    const sync = (): void => setFull(document.fullscreenElement != null);
+    document.addEventListener("fullscreenchange", sync);
+    sync();
+    return () => document.removeEventListener("fullscreenchange", sync);
+  }, []);
+
+  async function toggleFullscreen(): Promise<void> {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await frame.current?.requestFullscreen();
+    } catch (e) {
+      // 権限や埋め込み条件で拒否されることがある（iframe の allowfullscreen 無し等）。
+      toast.error("全画面にできませんでした", { description: errText(e) });
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      {/* 閉じる手段は 1 つに揃える（右上の × は出さず、下の行の「閉じる」だけ）。
+          **全画面にするのはこのダイアログ全体**（絵の枠だけにすると、全画面の間は
+          ボタンが描画されず、Esc しか残らない＝出口を塞いでしまう）。 */}
+      <DialogContent
+        ref={frame}
+        showCloseButton={false}
+        className="zoom-dialog max-w-[min(96vw,1400px)] gap-3"
+      >
+        <DialogHeader>
+          <DialogTitle className="truncate text-sm font-medium">{name}</DialogTitle>
+          <DialogDescription className="num text-xs">{dims}</DialogDescription>
+        </DialogHeader>
+        {/* 市松の上に収めるので、透過も等倍でない縮小も分かる。
+            全画面時の寸法は index.css が持つ（Tailwind v4 に `fullscreen:` variant は無く、
+            書いても 1 行も生成されない）。 */}
+        <div className={cn(IMAGE_FRAME, "zoom-frame flex items-center justify-center")}>
+          {url ? (
+            <img
+              src={url}
+              alt={`変換後: ${name}`}
+              className="max-h-full max-w-full object-contain"
+            />
+          ) : null}
+        </div>
+        <DialogFooter className="sm:justify-start">
+          {actions}
+          <Button variant="outline" className="gap-1.5" onClick={() => void toggleFullscreen()}>
+            {full ? <Minimize className="size-4" /> : <Maximize className="size-4" />}
+            {full ? "全画面をやめる" : "全画面"}
+          </Button>
+          <DialogClose asChild>
+            <Button variant="ghost">閉じる</Button>
+          </DialogClose>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

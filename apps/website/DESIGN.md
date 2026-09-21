@@ -204,6 +204,11 @@ IndexedDB・権限の扱い）を定める。**キャッシュやストレージ
 作り直す契機は `previewKey`（名前 + 原寸 + 解決済み `ConvertOptions`）で判定する。
 `form` 全体を見張ると、出力に関係しない欄を触っただけで再変換が走る。
 
+**`:fullscreen` の見た目は `@layer utilities` に置く。** `base` に書くと `DialogContent` の
+効用類（`grid` / `rounded-lg` / `translate-*`）に負けて**書いたのに 1 つも効かない**
+（層の優先が specificity より強い）。Tailwind v4 に `fullscreen:` variant は無いので、
+素の CSS として持つしかない。
+
 **保存できるのは「今の鍵の結果」だけ。** `保存` は `preview.key` が今の鍵と一致するときだけ出る
 ＝「見えている物を保存できる」。前の結果を新しい名前で落とせてしまわないよう、
 リンクの `href` は絵とは**別の object URL** から張る（`useObjectUrl` は effect で URL を

@@ -182,6 +182,10 @@
       transform: translateX(100%);
     }
   }
+  /** 拡大ダイアログの絵の枠。普段は画面の 7 割に収める（全画面時は下の utilities 層）。 */
+  .zoom-frame {
+    max-height: 70vh;
+  }
   /* 動きは reduce 設定を尊重して実質無効化（UI.md §5.4 / WCAG）。 */
   @media (prefers-reduced-motion: reduce) {
     *,
@@ -192,5 +196,35 @@
       transition-duration: 0.001ms !important;
       scroll-behavior: auto !important;
     }
+  }
+}
+
+/**
+ * 拡大ダイアログの全画面。**`@layer utilities` に置く** —— `base` に書くと
+ * `DialogContent` の効用類（`grid` / `rounded-lg` / `translate-*`）に負けて、
+ * 書いたのに 1 つも効かない（層の優先が specificity より強い）。
+ *
+ * 全画面にするのはダイアログ全体で、絵の枠だけにすると全画面の間にボタンが
+ * 描画されず出口を塞いでしまう。`:fullscreen` は Tailwind v4 に variant が無いので
+ * ここで素の CSS として持つ。
+ */
+@layer utilities {
+  .zoom-dialog:fullscreen {
+    /* `DialogContent` は grid。絵に余りを渡すには flex 列にする（grid の子に flex は無効）。 */
+    display: flex;
+    flex-direction: column;
+    inset: 0;
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    max-height: none;
+    transform: none;
+    border-width: 0;
+    border-radius: 0;
+  }
+  .zoom-dialog:fullscreen .zoom-frame {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
   }
 }
