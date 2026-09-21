@@ -1,5 +1,5 @@
 import { Moon, Sun } from "lucide-react";
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
@@ -11,6 +11,10 @@ import { ScanScreen } from "@/screens/ScanScreen";
 import { ConvertScreen } from "@/screens/ConvertScreen";
 import { CompareScreen } from "@/screens/CompareScreen";
 import { InstallScreen } from "@/screens/InstallScreen";
+
+// OG 画像を作り直すためだけの画面。**使うのは作り直すときだけ**なので、
+// 描画ライブラリ（snapdom）ごと別チャンクに切り出して、開いたときだけ読む。
+const OgScreen = lazy(() => import("@/screens/OgScreen").then((m) => ({ default: m.OgScreen })));
 
 // ルーティングは react-router（History API・`#` なし）。画面の状態は zustand ストアが
 // コンポーネント外で保持するので、ルート切替でアンマウントされてもスキャン/比較結果は消えない。
@@ -66,6 +70,14 @@ export function App() {
           <Route path="/compare" element={<CompareScreen />} />
           <Route path="/convert" element={<ConvertScreen />} />
           <Route path="/install" element={<InstallScreen />} />
+          <Route
+            path="/og"
+            element={
+              <Suspense fallback={<p className="text-sm text-muted-foreground">読み込み中…</p>}>
+                <OgScreen />
+              </Suspense>
+            }
+          />
           {/* 未知のパスは scan へ。静的配信側のルート複製は vite.config の
               emitRouteFallbacks が `@/routes` の ROUTES から作る（足すときは両方が揃う）。 */}
           <Route path="*" element={<Navigate to="/scan" replace />} />

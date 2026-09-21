@@ -9,6 +9,22 @@
       content="重複・類似画像をブラウザ内で検出。フォルダの重複検索と 2 枚比較。画像は送信されません。"
     />
     <title>img-diff — 重複・類似画像を探す</title>
+
+    <!-- SNS のカード。画像は `/og` の画面から書き出したもの（作り直せる形で残してある）。
+         URL は絶対でないと読まれないので、配信元が変わったらここも変える。 -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="img-diff" />
+    <meta property="og:title" content="img-diff — 重複・類似画像を探す" />
+    <meta
+      property="og:description"
+      content="重複・類似画像をブラウザ内で検出。フォルダの重複検索と 2 枚比較。画像は送信されません。"
+    />
+    <meta property="og:url" content="https://imgdiff.wgzhao.me/" />
+    <meta property="og:image" content="https://imgdiff.wgzhao.me/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="img-diff — 重複・類似画像を、ブラウザだけで。" />
+    <meta name="twitter:card" content="summary_large_image" />
     <!-- 描画前にテーマを確定して FOUC を防ぐ（保存値 → OS 設定の順）。shadcn 規約の .dark クラス。 -->
     <script>
       (() => {

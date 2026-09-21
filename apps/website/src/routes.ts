@@ -7,6 +7,8 @@
 //
 // その生成は `vite.config.ts` がこの配列を読んで行う。**ルートを足したらここに足すだけ**で、
 // ルーティングと配信の両方が揃う（片方だけ足して静かに 404 になるのを防ぐ）。
-export const ROUTES = ["scan", "compare", "convert", "install"] as const;
+// `og` は OG 画像を作り直すためだけの画面（公開ナビからは辿れない）。ここに置くのは
+// 配信側のフォールバックを揃えるため —— 本番で直接開いても 404 にしない。
+export const ROUTES = ["scan", "compare", "convert", "install", "og"] as const;
 
 export type RoutePath = (typeof ROUTES)[number];
