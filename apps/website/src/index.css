@@ -45,6 +45,7 @@
   --diff-overlay: #ff2d55; /* 画素 diff（teal と補色） */
   --warning: #92510a;
   --checker: #eef3f2; /* 透過 PNG の市松 */
+  --shimmer: rgb(255 255 255 / 0.65); /* 読み込み中の枠を撫でる光（明色面の上） */
 
   /* 影（UI.md §5.4: teal 基調の控えめな影。glow 禁止）。 */
   --ui-shadow-sm: 0 1px 2px rgba(15, 42, 39, 0.06);
@@ -78,6 +79,7 @@
   --diff-overlay: #ff5470;
   --warning: #e0b057;
   --checker: #17231f;
+  --shimmer: rgb(255 255 255 / 0.11);
 
   /* 暗色は影を弱め、罫線主体に（UI.md §5.2）。 */
   --ui-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
@@ -155,6 +157,30 @@
       0 8px,
       8px -8px,
       -8px 0;
+  }
+  /**
+   * 読み込み中の枠を撫でる光（UI.md §6）。面の上を一方向に流すだけで、
+   * 発光も色替えもしない（§8 のグラデ禁止に触れない）。
+   *
+   * **reduce 指定では止まる**（下の一括無効化に掛かる）。だから枠だけに頼らず、
+   * 何を待っているのかは必ず文字でも言うこと。
+   */
+  .shimmer {
+    position: relative;
+    overflow: hidden;
+  }
+  .shimmer::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background-image: linear-gradient(90deg, transparent, var(--shimmer), transparent);
+    animation: shimmer 1.4s ease-in-out infinite;
+  }
+  @keyframes shimmer {
+    100% {
+      transform: translateX(100%);
+    }
   }
   /* 動きは reduce 設定を尊重して実質無効化（UI.md §5.4 / WCAG）。 */
   @media (prefers-reduced-motion: reduce) {

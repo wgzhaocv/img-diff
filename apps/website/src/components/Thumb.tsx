@@ -61,7 +61,7 @@ export function Thumb({
       ) : (
         // **待っている枠は黙らせない**（UI.md §6）。空の市松だけだと、デコード待ちなのか
         // 何も無いのかが見分けられず、固まったように見える。
-        <Skeleton className="size-full rounded-none bg-muted/60" />
+        <Skeleton className="size-full rounded-none" />
       )}
     </div>
   );

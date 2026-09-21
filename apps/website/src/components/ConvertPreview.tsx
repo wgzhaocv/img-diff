@@ -123,7 +123,7 @@ export function ConvertPreview() {
             {beforeUrl ? (
               <img src={beforeUrl} alt={`変換前: ${name}`} className="size-full object-contain" />
             ) : (
-              <Skeleton className="size-full rounded-none bg-muted/60" />
+              <Skeleton className="size-full rounded-none" />
             )}
           </div>
           <figcaption className="text-xs text-muted-foreground">変換前</figcaption>
@@ -144,9 +144,17 @@ export function ConvertPreview() {
               />
             ) : null}
             {/* 絵が無い間だけ。**理由が出ているときは出さない** ——
-                「書き出せません」の横で脈打っていたら、まだ作っているように見える。 */}
+                「書き出せません」の横で光っていたら、まだ作っているように見える。 */}
             {!afterUrl && error == null && (loadingEngine || rendering) ? (
-              <Skeleton className="size-full rounded-none bg-muted/60" />
+              <Skeleton className="size-full rounded-none" />
+            ) : null}
+            {/* **回っている物を置く。** 数秒かかる待ち（wasm の読み込み・avif の符号化）では、
+                枠が光っているだけだと「動いているのか」が分からない。
+                reduce 指定では止まるので、見出しの文字が状態の正本（`Skeleton` の説明）。 */}
+            {error == null && (loadingEngine || rendering) ? (
+              <span className="absolute inset-0 flex items-center justify-center">
+                <Loader2 className="size-7 animate-spin text-primary" aria-hidden="true" />
+              </span>
             ) : null}
             {afterUrl && !renderable ? (
               // wasm-vips は書けてもブラウザが描けない形式（jxl / tiff / ppm）。

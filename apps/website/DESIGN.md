@@ -282,6 +282,8 @@ scan / compare 系（`hash` / `pixel` / `decode`）は呼び出し側が既に�
   掃除を張り直す（さもないと「次の画面切替まで畳まれない」＝居座りになる）。
 
 **「読み込み中」と「生成中」は画面で区別する**（UI.md §6）。出所は `engine` 1 つ。
+待ちの見せ方は 3 つ重ねる: 不透明な面に光を流す（`.shimmer`）+ 回る物（`Loader2`）+ 文字。
+`prefers-reduced-motion` は前の 2 つを止めるので、**文字だけが常に残る**。
 
 原寸とサムネは専用の `op:"info"` で取る（`workers/vips.ts::applyInfo`）。
 `decodeCanonical` を流用すると**全分解能 RGBA** と dHash を作ることになり、
