@@ -186,19 +186,22 @@ export function ConvertPreview() {
             `href` を絵とは別の url から張るのは、`useObjectUrl` が effect で張り替える
             ぶん、新しい結果が届いた最初の 1 フレームだけ絵と食い違うため
             （そこで押すと「新しい名前で古い画像」が落ちる）。 */}
-        <Button asChild disabled={!ready}>
-          {ready ? (
+        {/* **無効時は素の `button disabled` を描く。** `asChild` に `disabled` を渡すと
+            Radix Slot が子へ透過して `<span disabled="">` になり、無効な DOM のうえ
+            `:disabled` に当たらないので**見た目が押せるまま**になる。 */}
+        {ready ? (
+          <Button asChild>
             <a href={savableUrl} download={outPathFor(name, shown.format)} className="gap-1.5">
               <Download className="size-4" />
               保存
             </a>
-          ) : (
-            <span className="gap-1.5">
-              <Download className="size-4" />
-              保存
-            </span>
-          )}
-        </Button>
+          </Button>
+        ) : (
+          <Button disabled className="gap-1.5">
+            <Download className="size-4" />
+            保存
+          </Button>
+        )}
         <Button
           variant="outline"
           className="gap-1.5"

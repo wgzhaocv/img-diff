@@ -150,8 +150,15 @@ let sourcesGen = 0;
  */
 let previewBusy = false;
 let previewQueued = false;
-/** 原寸の取得が飛んでいるか（二重起動で同じ画像を二度デコードしない）。 */
-let infoInflight = false;
+/**
+ * 原寸の取得が飛んでいる**世代**（二重起動で同じ画像を二度デコードしない）。
+ *
+ * 真偽値では足りない: 選び直しを跨ぐと、**古い取得の後始末が新しい取得の旗を降ろす**。
+ * そうなると走っている最中の 1 枚が「未取得」に見え、`renderPreview` の催促で
+ * もう一度読み込み・デコードされ、`prefillDimensions` が原寸を二度書き込む
+ * （空にした寸法欄が勝手に埋まる）。
+ */
+let infoGen: number | null = null;
 /**
  * エンジンの先起こし。**走っている間の再入を防ぐ**ので、画面が何度 mount しても
  * ダウンロードは 1 回で済む。
@@ -359,7 +366,6 @@ export const useConvertStore = create<ConvertState>()(
       setSource: (source) => {
         sourcesGen += 1;
         previewQueued = false;
-        infoInflight = false;
         // **寸法は毎回リセットする。** 選び直したら新しい画像の原寸から始める（記憶もしない）。
         set((s) => ({
           source,
@@ -381,9 +387,9 @@ export const useConvertStore = create<ConvertState>()(
        */
       loadInfo: async () => {
         const src = get().source;
-        if (!src || get().info || infoInflight) return;
+        if (!src || get().info || infoGen === sourcesGen) return;
         const gen = sourcesGen;
-        infoInflight = true;
+        infoGen = gen;
         const releaseHold = pool.hold();
         try {
           const bytes = await src.bytes();
@@ -406,7 +412,8 @@ export const useConvertStore = create<ConvertState>()(
           // ただし**答えは必ず残す** —— 何も書かずに終わるとプレビューがそこで止まる。
           if (gen === sourcesGen) set({ info: { width: 0, height: 0, bytes: 0 } });
         } finally {
-          infoInflight = false;
+          // **自分の世代のときだけ降ろす**（上の `infoGen` の説明のとおり）。
+          if (infoGen === gen) infoGen = null;
           releaseHold();
         }
       },
