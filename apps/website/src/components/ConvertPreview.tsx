@@ -148,14 +148,6 @@ export function ConvertPreview() {
             {!afterUrl && error == null && (loadingEngine || rendering) ? (
               <Skeleton className="size-full rounded-none" />
             ) : null}
-            {/* **回っている物を置く。** 数秒かかる待ち（wasm の読み込み・avif の符号化）では、
-                枠が光っているだけだと「動いているのか」が分からない。
-                reduce 指定では止まるので、見出しの文字が状態の正本（`Skeleton` の説明）。 */}
-            {error == null && (loadingEngine || rendering) ? (
-              <span className="absolute inset-0 flex items-center justify-center">
-                <Loader2 className="size-7 animate-spin text-primary" aria-hidden="true" />
-              </span>
-            ) : null}
             {afterUrl && !renderable ? (
               // wasm-vips は書けてもブラウザが描けない形式（jxl / tiff / ppm）。
               // 絵は諦めて、寸法とサイズだけ正しく見せる。
@@ -165,10 +157,17 @@ export function ConvertPreview() {
             ) : null}
           </div>
           {/* **何を待っているのかを言う**（UI.md §6）。エンジンの読み込みと生成は
-              待ち時間の性格が違う（前者は約 11.9MB のダウンロード・一度だけ）。 */}
-          <figcaption className="text-xs text-muted-foreground">
+              待ち時間の性格が違う（前者は約 11.9MB のダウンロード・一度だけ）。
+              回る物は**この文字の側に付ける** —— 枠は既に光っているので、そこへ重ねると
+              同じ場所で 2 つの動きがぶつかる。 */}
+          <figcaption className="flex items-center gap-1.5 text-xs text-muted-foreground">
             変換後
-            {loadingEngine ? "（エンジンを読み込み中…）" : rendering ? "（生成中…）" : null}
+            {loadingEngine || rendering ? (
+              <>
+                <Loader2 className="size-3 shrink-0 animate-spin text-primary" aria-hidden="true" />
+                <span>{loadingEngine ? "エンジンを読み込み中…" : "生成中…"}</span>
+              </>
+            ) : null}
           </figcaption>
           {error != null ? (
             <div className="text-xs text-warning">{error}</div>
