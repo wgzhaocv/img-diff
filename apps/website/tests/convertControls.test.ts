@@ -3,6 +3,7 @@ import type { ConvertOptions } from "schema";
 import {
   cannotWriteReason,
   gravityAxes,
+  matchRatio,
   gravityFromParts,
   gravityParts,
   projectGravity,
@@ -66,6 +67,29 @@ describe("背景色（background）", () => {
     expect(relevantControls(opts, "png", { width: 400, height: 400 }).background).toBe(false);
     // 縦横比が違えば余白は出る。
     expect(relevantControls(opts, "png", { width: 800, height: 200 }).background).toBe(true);
+  });
+});
+
+describe("縦横比がぴったり合っているなら合わせ方も出さない", () => {
+  // 3 つの合わせ方（切り抜く / 収める / 引き伸ばす）が同じ結果になるので選ばせる意味が無い。
+  // 錠（縦横比を保つ）が入っていると常にこの状態になる。
+  const src = { width: 1600, height: 1200 };
+  const at = (width: string, height: string) =>
+    relevantControls({ width, height, fit: "cover" as const, format: "" }, "jpg", src);
+
+  it("比が合っていれば出さない", () => {
+    expect(at("400", "300").fit).toBe(false);
+    expect(at("800", "600").fit).toBe(false);
+  });
+
+  it("切り抜きが起きるなら出す", () => {
+    expect(at("400", "400").fit).toBe(true);
+  });
+
+  it("原寸が分からないうちは出す（起きないと証明できていない）", () => {
+    expect(
+      relevantControls({ width: "400", height: "300", fit: "cover", format: "" }, "jpg", null).fit,
+    ).toBe(true);
   });
 });
 
@@ -245,5 +269,34 @@ describe("読めるが書けない形式は、押す前に理由を出す", () =
 
   it("出力形式を指定すれば通る", () => {
     expect(cannotWriteReason(opts({ format: "jpg" }), "heic")).toBeNull();
+  });
+});
+
+describe("縦横比の錠（matchRatio）", () => {
+  const src = { width: 1024, height: 768 };
+
+  it("片方から他方を出す", () => {
+    expect(matchRatio(src, "width", 400)).toBe(300);
+    expect(matchRatio(src, "height", 300)).toBe(400);
+  });
+
+  it("正方形なら同じ値", () => {
+    expect(matchRatio({ width: 1024, height: 1024 }, "width", 828)).toBe(828);
+  });
+
+  it("四捨五入する（1px はずれる・隠さない）", () => {
+    // 1023×768 の幅 400 → 300.29…。整数比だけ許す方が使えないので丸める。
+    expect(matchRatio({ width: 1023, height: 768 }, "width", 400)).toBe(300);
+  });
+
+  it("極端に細くしても 1px は残す（0 は寸法として無効）", () => {
+    expect(matchRatio({ width: 4000, height: 10 }, "width", 100)).toBe(1);
+  });
+
+  it("原寸が分からない・値が正でないときは書き戻さない", () => {
+    expect(matchRatio(null, "width", 400)).toBeNull();
+    expect(matchRatio({ width: 0, height: 0 }, "width", 400)).toBeNull();
+    expect(matchRatio(src, "width", 0)).toBeNull();
+    expect(matchRatio(src, "width", Number.NaN)).toBeNull();
   });
 });

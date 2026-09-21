@@ -1,4 +1,5 @@
 import { useEffect, useMemo } from "react";
+import { Lock, LockOpen } from "lucide-react";
 import type { ConvertFit, ConvertGravity } from "schema";
 import { buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,6 +16,7 @@ import {
 import {
   FIT_VALUES,
   GRAVITY_VALUES,
+  matchRatio,
   presetWidths,
   projectGravity,
   relevantControls,
@@ -73,6 +75,34 @@ export function ConvertOptions() {
   // 片方だけの指定は等比縮小になり、合わせ方の欄が消える。消えた理由をここで一言だけ言う。
   const onlyOneDim = (parseDim(form.width) == null) !== (parseDim(form.height) == null);
 
+  /**
+   * 寸法欄の編集。錠が入っていれば**触られていない側**を縦横比から書き戻す。
+   * 読めない値（空・途中まで打った `1.`・0）のときは相手を動かさない ——
+   * 打っている最中に勝手な数が入ると、直したいのに直せなくなる。
+   */
+  function editDim(edited: "width" | "height", raw: string): void {
+    if (!form.lockRatio) {
+      setForm({ [edited]: raw });
+      return;
+    }
+    const n = parseDim(raw);
+    const other = n == null ? null : matchRatio(info, edited, n);
+    const key = edited === "width" ? "height" : "width";
+    setForm(other == null ? { [edited]: raw } : { [edited]: raw, [key]: String(other) });
+  }
+
+  /** 錠を入れた瞬間に、今の寸法を縦横比へ合わせ直す（入れたのに合っていないのは嘘）。 */
+  function toggleLock(on: boolean): void {
+    if (!on) {
+      setForm({ lockRatio: false });
+      return;
+    }
+    const w = parseDim(form.width);
+    const h = matchRatio(info, "width", w ?? 0);
+    // 幅が読めない（空など）ときは合わせ直せないので、錠だけ入れる。
+    setForm(h == null ? { lockRatio: true } : { lockRatio: true, height: String(h) });
+  }
+
   return (
     <div className="space-y-6">
       <fieldset className="space-y-3">
@@ -86,7 +116,7 @@ export function ConvertOptions() {
               placeholder="自動"
               className="w-28 font-mono tabular-nums"
               value={form.width}
-              onChange={(e) => setForm({ width: e.target.value })}
+              onChange={(e) => editDim("width", e.target.value)}
             />
           </div>
           <div className="space-y-2">
@@ -97,15 +127,38 @@ export function ConvertOptions() {
               placeholder="自動"
               className="w-28 font-mono tabular-nums"
               value={form.height}
-              onChange={(e) => setForm({ height: e.target.value })}
+              onChange={(e) => editDim("height", e.target.value)}
             />
           </div>
           <span className="pb-2 text-sm text-muted-foreground">px</span>
         </div>
-        <SizePresets presets={presets} />
+        {/* **錠。** 片方を直すともう片方が縦横比から追う。既定で入っている
+            （片方だけ直して意図しない切り抜きになるのが既定、というのはおかしい）。 */}
+        <label className="flex w-fit items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="size-4 accent-primary"
+            checked={form.lockRatio}
+            onChange={(e) => toggleLock(e.target.checked)}
+          />
+          {form.lockRatio ? (
+            <Lock className="size-3.5 text-primary-text" aria-hidden="true" />
+          ) : (
+            <LockOpen className="size-3.5 text-muted-foreground" aria-hidden="true" />
+          )}
+          縦横比を保つ
+        </label>
+        <SizePresets presets={presets} lockRatio={form.lockRatio} />
         {/* 「拡大しない」だけは画面から読み取れないので残す。他は結果が見えている。 */}
+        {/* 「拡大しない」は画面から読み取れない。合わせ方の欄が消えたときは、
+            残っているこちら側でその理由も言う（UI.md §6.1）。 */}
         <p className="text-sm text-muted-foreground">
-          拡大はしません{onlyOneDim ? "・片方だけなら縦横比を保ちます" : null}
+          拡大はしません
+          {form.lockRatio && !show.fit
+            ? "・縦横比を保つので切り抜きません"
+            : !form.lockRatio && onlyOneDim
+              ? "・片方だけなら縦横比を保ちます"
+              : null}
         </p>
       </fieldset>
 
@@ -182,7 +235,7 @@ export function ConvertOptions() {
  *
  * 原寸の数値は文字で出さない: プレビューの「変換前」が同じ数字を出している（UI.md §6.1）。
  */
-function SizePresets({ presets }: { presets: number[] }) {
+function SizePresets({ presets, lockRatio }: { presets: number[]; lockRatio: boolean }) {
   const info = useConvertStore((s) => s.info);
   const width = useConvertStore((s) => s.form.width);
   const height = useConvertStore((s) => s.form.height);
@@ -201,16 +254,24 @@ function SizePresets({ presets }: { presets: number[] }) {
         patch: { width: String(info.width), height: String(info.height) },
         extra: "",
       },
-      ...presets.map((w) => ({
-        key: String(w),
-        label: String(w),
-        hint: `幅 ${w} px（縦横比はそのまま）`,
-        selected: proportional && width === String(w),
-        patch: { width: String(w), height: "" },
-        extra: "num",
-      })),
+      ...presets.map((w) => {
+        // **錠が入っていれば高さも埋める**（画面と錠の状態が食い違わないように）。
+        const h = lockRatio ? matchRatio(info, "width", w) : null;
+        return {
+          key: String(w),
+          label: String(w),
+          hint: `幅 ${w} px（縦横比はそのまま）`,
+          selected:
+            h == null
+              ? proportional && width === String(w)
+              : width === String(w) && height === String(h),
+          patch:
+            h == null ? { width: String(w), height: "" } : { width: String(w), height: String(h) },
+          extra: "num",
+        };
+      }),
     ];
-  }, [info, presets, width, height]);
+  }, [info, lockRatio, presets, width, height]);
 
   if (choices.length === 0) return null;
   return (

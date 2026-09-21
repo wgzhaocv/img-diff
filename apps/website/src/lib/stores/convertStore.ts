@@ -51,6 +51,12 @@ export type ConvertForm = {
    * 「何も指定していない」と区別するために要る（参照実装の「`q` を明示したら再符号化」と同じ）。
    */
   qualityTouched: boolean;
+  /**
+   * 縦横比を保つ（片方を直すともう片方が追う）。**既定で入っている** ——
+   * 片方だけ直して意図しない切り抜きになるのが既定、というのはおかしい。
+   * 切り抜きたい人は外す（外したことは次に開いても残る）。
+   */
+  lockRatio: boolean;
 };
 
 export const DEFAULT_FORM: ConvertForm = {
@@ -62,6 +68,7 @@ export const DEFAULT_FORM: ConvertForm = {
   format: "",
   quality: 80,
   qualityTouched: false,
+  lockRatio: true,
 };
 
 /**
@@ -94,6 +101,7 @@ const REMEMBERED: {
     typeof v === "string" && (v === "" || WRITABLE_FORMATS.includes(v)) ? v : undefined,
   quality: (v) => (typeof v === "number" ? clampQuality(v) : undefined),
   qualityTouched: (v) => (typeof v === "boolean" ? v : undefined),
+  lockRatio: (v) => (typeof v === "boolean" ? v : undefined),
 };
 
 /** 記憶する部分だけの形。ここに欄を足すと `REMEMBERED` の検証も必須になる（型で強制される）。 */

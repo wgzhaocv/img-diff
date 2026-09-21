@@ -130,11 +130,14 @@ export function relevantControls(
       gravity: "center",
     });
     const axes = gravityAxes(plan);
+    // 余白（contain）も切り抜き（cover）も起きないなら、**3 つの合わせ方は同じ結果**になる
+    // ＝選ばせる意味が無い。縦横比を保つ指定（錠）では常にこれになる。
+    const padded = plan.kind === "contain";
     return {
-      fit,
+      fit: axes.x || axes.y || padded,
       gravity: axes.x || axes.y,
       // 背景は contain の余白にしか使わない（余白が出ないときは kind が contain にならない）。
-      background: plan.kind === "contain",
+      background: padded,
       quality,
       axes,
     };
@@ -149,6 +152,31 @@ export function relevantControls(
     quality,
     axes: { x: true, y: true },
   };
+}
+
+/**
+ * **縦横比を保ったまま、片方の辺から他方を出す。** 錠（`lockRatio`）が入っているときに、
+ * 触られていない側の欄へ書き戻す値。
+ *
+ * 四捨五入するので 1px はずれ得る（1023×768 の幅 400 は高さ 300.29 → 300）。
+ * それでよい: 画像編集ソフトも同じで、ずれた 1px は `planGeometry` が切り抜きとして
+ * 正直に扱う（隠すために整数比だけ許す、の方が使えない）。
+ *
+ * 原寸が分からない・値が正でないときは `null`（書き戻さない）。
+ */
+export function matchRatio(
+  src: { width: number; height: number } | null | undefined,
+  edited: "width" | "height",
+  value: number,
+): number | null {
+  if (!src || src.width <= 0 || src.height <= 0 || !Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+  const other =
+    edited === "width"
+      ? Math.round((value * src.height) / src.width)
+      : Math.round((value * src.width) / src.height);
+  return Math.max(1, other);
 }
 
 /**

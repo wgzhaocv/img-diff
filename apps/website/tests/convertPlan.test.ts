@@ -436,10 +436,10 @@ describe("画質だけの再圧縮（forceReencode）", () => {
 });
 
 describe("次に開いたときも残す設定", () => {
-  it("寸法と上書きは残さない（寸法は画像に付随・上書きは安全側へ戻す）", () => {
+  it("寸法は残さない（画像に付随する値なので、毎回その画像の原寸から始める）", () => {
     const keys = Object.keys(rememberedForm(DEFAULT_FORM)).sort();
     expect(keys).toEqual(
-      ["background", "fit", "format", "gravity", "quality", "qualityTouched"].sort(),
+      ["background", "fit", "format", "gravity", "lockRatio", "quality", "qualityTouched"].sort(),
     );
   });
 
