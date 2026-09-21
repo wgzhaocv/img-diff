@@ -182,10 +182,6 @@
       transform: translateX(100%);
     }
   }
-  /** 拡大ダイアログの絵の枠。普段は画面の 7 割に収める（全画面時は下の utilities 層）。 */
-  .zoom-frame {
-    max-height: 70vh;
-  }
   /* 動きは reduce 設定を尊重して実質無効化（UI.md §5.4 / WCAG）。 */
   @media (prefers-reduced-motion: reduce) {
     *,
@@ -200,31 +196,28 @@
 }
 
 /**
- * 拡大ダイアログの全画面。**`@layer utilities` に置く** —— `base` に書くと
- * `DialogContent` の効用類（`grid` / `rounded-lg` / `translate-*`）に負けて、
- * 書いたのに 1 つも効かない（層の優先が specificity より強い）。
+ * 拡大の全画面。**対象は絵の枠だけ**で、`DialogContent` を対象にすると Tailwind の
+ * 位置の効用類（`fixed top-[50%] translate-*`）と競合して画面の隅に寄る
+ * —— 同じ `utilities` 層なので specificity では決まらず、生成順が勝つ。
  *
- * 全画面にするのはダイアログ全体で、絵の枠だけにすると全画面の間にボタンが
- * 描画されず出口を塞いでしまう。`:fullscreen` は Tailwind v4 に variant が無いので
- * ここで素の CSS として持つ。
+ * 位置は書かない: ブラウザの `:fullscreen` 既定（`position:fixed` + 画面いっぱい）に任せる。
+ * ここで消すのは**絵以外の物だけ** —— 市松・枠線・角丸。
+ * `:fullscreen` は Tailwind v4 に variant が無いので素の CSS として持つ。
  */
 @layer utilities {
-  .zoom-dialog:fullscreen {
-    /* `DialogContent` は grid。絵に余りを渡すには flex 列にする（grid の子に flex は無効）。 */
-    display: flex;
-    flex-direction: column;
-    inset: 0;
-    width: 100%;
-    max-width: none;
-    height: 100%;
+  .zoom-frame {
+    max-height: 70vh;
+  }
+  .zoom-frame:fullscreen {
     max-height: none;
-    transform: none;
+    /* 市松を消して、絵だけが乗る面にする。 */
+    background-image: none;
+    background-color: var(--background);
     border-width: 0;
     border-radius: 0;
   }
-  .zoom-dialog:fullscreen .zoom-frame {
-    flex: 1 1 auto;
-    min-height: 0;
-    max-height: none;
+  .zoom-frame:fullscreen img {
+    max-width: 100%;
+    max-height: 100%;
   }
 }

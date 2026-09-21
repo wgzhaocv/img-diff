@@ -353,22 +353,19 @@ function ZoomDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      {/* 閉じる手段は 1 つに揃える（右上の × は出さず、下の行の「閉じる」だけ）。
-          **全画面にするのはこのダイアログ全体**（絵の枠だけにすると、全画面の間は
-          ボタンが描画されず、Esc しか残らない＝出口を塞いでしまう）。 */}
-      <DialogContent
-        ref={frame}
-        showCloseButton={false}
-        className="zoom-dialog max-w-[min(96vw,1400px)] gap-3"
-      >
+      {/* 閉じる手段は 1 つに揃える（右上の × は出さず、下の行の「閉じる」だけ）。 */}
+      <DialogContent showCloseButton={false} className="max-w-[min(96vw,1400px)] gap-3">
         <DialogHeader>
           <DialogTitle className="truncate text-sm font-medium">{name}</DialogTitle>
           <DialogDescription className="num text-xs">{dims}</DialogDescription>
         </DialogHeader>
-        {/* 市松の上に収めるので、透過も等倍でない縮小も分かる。
-            全画面時の寸法は index.css が持つ（Tailwind v4 に `fullscreen:` variant は無く、
-            書いても 1 行も生成されない）。 */}
-        <div className={cn(IMAGE_FRAME, "zoom-frame flex items-center justify-center")}>
+        {/* **全画面にするのはこの枠だけ。** ダイアログ全体を対象にすると、`DialogContent` の
+            位置の効用類（`fixed top-[50%] translate-*`）と競合して画面の隅に寄る
+            （実機で確認）。位置を持たない裸の要素なら、ブラウザの `:fullscreen` 既定が
+            そのまま効く。全画面では**絵だけを中央に**置き、市松も枠線も出さない
+            （出口は Esc。ブラウザが「press esc」と自分で案内する）。
+            普段は市松の上に収めるので、透過も等倍でない縮小も分かる。 */}
+        <div ref={frame} className={cn(IMAGE_FRAME, "zoom-frame flex items-center justify-center")}>
           {url ? (
             <img
               src={url}

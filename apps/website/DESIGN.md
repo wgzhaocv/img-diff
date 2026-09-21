@@ -204,10 +204,13 @@ IndexedDB・権限の扱い）を定める。**キャッシュやストレージ
 作り直す契機は `previewKey`（名前 + 原寸 + 解決済み `ConvertOptions`）で判定する。
 `form` 全体を見張ると、出力に関係しない欄を触っただけで再変換が走る。
 
-**`:fullscreen` の見た目は `@layer utilities` に置く。** `base` に書くと `DialogContent` の
-効用類（`grid` / `rounded-lg` / `translate-*`）に負けて**書いたのに 1 つも効かない**
-（層の優先が specificity より強い）。Tailwind v4 に `fullscreen:` variant は無いので、
-素の CSS として持つしかない。
+**全画面にするのは絵の枠だけで、位置は書かない。** `DialogContent` を対象にすると
+Tailwind の位置の効用類（`fixed top-[50%] translate-*`）と競合して画面の隅に寄る ——
+自前の規則も `@layer utilities` に置くしかないので**同じ層になり、specificity では決まらず
+生成順で負ける**（実機で隅に寄って初めて分かった。`display` と角丸だけ見て通したのが甘かった）。
+位置を持たない裸の要素なら、ブラウザの `:fullscreen` 既定がそのまま効く。
+こちらで消すのは**絵以外の物だけ**（市松・枠線・角丸）。
+なお Tailwind v4 に `fullscreen:` variant は無い（書いても 1 行も生成されない）。
 
 **保存できるのは「今の鍵の結果」だけ。** `保存` は `preview.key` が今の鍵と一致するときだけ出る
 ＝「見えている物を保存できる」。前の結果を新しい名前で落とせてしまわないよう、
