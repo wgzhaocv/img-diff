@@ -218,6 +218,24 @@ native libvips が 1 線程 8.58s / 8 線程 1.22s、wasm は 33s —— **wasm 
 残りは全部が線程**。`vips.concurrency(8)` を渡しても変わらない
 （`vips-heif.wasm` に `pthread_create` が 1 つも無い）。
 
+**自前ビルドで線程を入れる実験は、ブラウザで行き止まりだった（2026-09-21）。** 再挑戦する人のために:
+
+- wasm-vips v0.0.18 を `-DCONFIG_MULTITHREAD=1`（aom）で焼き直すと、**node では狙いどおり速くなる** ——
+  1024×1024 → avif が 3645ms（1 線程）→ **669ms**（8 線程）の 5.4 倍。出力も同等。
+- ところが**同じ .wasm をブラウザの Web Worker で動かすと、`concurrency > 1` で確実に固まる**
+  （CPU 0.5%・無言・2 / 4 / 8 いずれも）。リンク時に emscripten が
+  `dynamic linking + pthreads is experimental` と警告する組み合わせ。
+- 動的リンクを疑って `--disable-modules`（libheif/aom を `vips.wasm` に静的リンク・11.4MB 単体）でも
+  焼いたが、**結果は同じ**。原因は動的リンクではなく、Worker の中から更に pthread を起こすことの方。
+- **libvips 自身のスレッドは Worker の中でも動く**（同じビルド・`concurrency(8)` で png は 602ms で完走）。
+  固まるのは aom の線程だけ。
+- ビルド自体の落とし穴も 3 つある: libpng の `CPPFLAGS` に `-msimd128` が要る / closure compiler が
+  Java 21 を要求する（emsdk 6.0.0 の image は 11）/ emsdk image の ENTRYPOINT が引数を食うので
+  動作確認は `--entrypoint=""` で。
+
+結論として、**avif が遅いのは受け入れる**。寸法の早押し（`PRESET_WIDTHS`）で縮めれば
+実用域に収まるし、縮めるのは元々やりたいことでもある。
+
 **実測**（4000×3000 の JPEG・dev ビルド）: 設定変更から結果まで 395〜426ms（うち 300ms は待ち）。
 幅を 16ms 間隔で 40 回連打しても、入力が止まってから ~350ms で最終結果に落ち着く。
 
