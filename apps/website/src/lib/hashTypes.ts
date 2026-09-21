@@ -10,9 +10,19 @@ import type { ConvertOptions } from "schema";
 //   デコード結果ではなく**符号化済みのバイト列**を返す。
 // op="info": 見せるためだけの情報（原寸 + サムネ）。ハッシュも全分解能 RGBA も作らない
 //   （convert 画面の入力一覧。数千枚を並べるので hash 経路だと重すぎる）。
+// op="warm": **画像を渡さずに wasm-vips だけ起こす**。約 11.9MB のダウンロードとコンパイルを
+//   利用者が画像を選んでいる間に済ませてしまうための空リクエスト（DESIGN §7.2）。
 export type WorkerRequest =
   | { op: "hash" | "pixel" | "decode" | "info"; path: string; bytes: ArrayBuffer }
-  | { op: "convert"; path: string; bytes: ArrayBuffer; options: ConvertOptions; srcFormat: string };
+  | { op: "convert"; path: string; bytes: ArrayBuffer; options: ConvertOptions; srcFormat: string }
+  | { op: "warm" };
+
+/**
+ * **画像を 1 枚抱えているリクエスト。** `warm` を足したことで `WorkerRequest` 全体には
+ * `path` / `bytes` が無くなったので、1 枚を処理する関数はこちらを受ける
+ * （union 全体を受けて中で絞り直すより、受け取る形で言い切る方が読める）。
+ */
+export type ImageRequest = Extract<WorkerRequest, { bytes: ArrayBuffer }>;
 
 export type HashResult = {
   op: "hash";
@@ -84,4 +94,16 @@ export type ConvertResult = {
   error?: string;
 };
 
-export type WorkerResponse = HashResult | PixelResult | DecodeResult | InfoResult | ConvertResult;
+/** `op:"warm"` の応答。**起きたことしか伝えない**（失敗は `error` に入れる）。 */
+export type WarmResult = {
+  op: "warm";
+  error?: string;
+};
+
+export type WorkerResponse =
+  | HashResult
+  | PixelResult
+  | DecodeResult
+  | InfoResult
+  | ConvertResult
+  | WarmResult;

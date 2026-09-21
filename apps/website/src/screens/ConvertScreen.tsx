@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { ConvertDestination } from "@/components/ConvertDestination";
 import { ConvertOptions } from "@/components/ConvertOptions";
@@ -17,6 +18,13 @@ import { useConvertStore } from "@/lib/stores/convertStore";
 
 export function ConvertScreen() {
   const hasSources = useConvertStore((s) => s.sources.length > 0);
+  const warmEngine = useConvertStore((s) => s.warmEngine);
+
+  // **画面を開いた時点で wasm-vips を起こす。**（約 11.9MB / 実測 2.5 秒）
+  // `hasSources` で条件を付けない —— 画像を選んでいる間にダウンロードを重ねるのが目的。
+  useEffect(() => {
+    void warmEngine();
+  }, [warmEngine]);
 
   return (
     <div className="mx-auto max-w-4xl space-y-8">

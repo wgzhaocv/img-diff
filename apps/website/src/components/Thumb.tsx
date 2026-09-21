@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { getThumb } from "@/lib/db";
 
@@ -55,7 +56,13 @@ export function Thumb({
 
   return (
     <div className={cn(IMAGE_FRAME, className)}>
-      {url ? <img src={url} alt={alt} loading="lazy" className="size-full object-cover" /> : null}
+      {url ? (
+        <img src={url} alt={alt} loading="lazy" className="size-full object-cover" />
+      ) : (
+        // **待っている枠は黙らせない**（UI.md §6）。空の市松だけだと、デコード待ちなのか
+        // 何も無いのかが見分けられず、固まったように見える。
+        <Skeleton className="size-full rounded-none bg-muted/60" />
+      )}
     </div>
   );
 }

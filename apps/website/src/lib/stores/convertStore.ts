@@ -188,6 +188,11 @@ let previewBusy = false;
 let previewQueued = false;
 /** 原寸の自動流し込みを済ませた世代（選び直しごとに一度だけ行う）。 */
 let prefilledGen = -1;
+/**
+ * エンジンの先起こし。**走っている間の再入を防ぐ**ので、画面が何度 mount しても
+ * ダウンロードは 1 回で済む。選び直しでは捨てない（wasm は使い回す）。
+ */
+let warming: Promise<void> | null = null;
 
 /** プレビュー 1 枚ぶんの結果（実際に変換して得たもの。推定値ではない）。 */
 export type PreviewResult = {
@@ -207,6 +212,12 @@ export type PreviewResult = {
    */
   key: string;
 };
+
+/**
+ * wasm-vips の準備段階。`"cold"` は「まだ起こしていない」で、失敗もここへ戻る
+ * （前倒しの失敗は報せない —— 本当の理由は実際に変換したときに同じ経路で出る）。
+ */
+export type EnginePhase = "cold" | "loading" | "ready";
 
 export type ConvertState = {
   sources: ConvertSource[];
@@ -235,6 +246,16 @@ export type ConvertState = {
    * 古い理由が新しい絵の横に残り、「押せない理由」としても効いてしまう。
    */
   previewError: { key: string; message: string } | null;
+  /**
+   * wasm-vips の準備段階。**「エンジンを読んでいる」と「変換している」を画面で区別する**
+   * ための唯一の出所。選び直しでは戻さない（一度起きたエンジンは使い回す）。
+   */
+  engine: EnginePhase;
+  /**
+   * 画面を開いた時点でエンジンを起こす。**二度呼んでも 1 回しか走らない。**
+   * 画像を選んでいる間にダウンロード（約 11.9MB）を重ねるのが目的（DESIGN §7.2）。
+   */
+  warmEngine: () => Promise<void>;
   setPreviewPath: (path: string | null) => void;
   setForm: (patch: Partial<ConvertForm>) => void;
   setSources: (sources: ConvertSource[]) => void;
@@ -359,6 +380,20 @@ export function previewSettled(s: ConvertState): boolean {
   return s.preview?.key === key || s.previewError?.key === key;
 }
 
+/**
+ * **表単が最終形になったか。** 代表 1 枚の原寸が届き、寸法欄への書き戻し
+ * （`prefillDimensions`）が済んだかを見る。
+ *
+ * これが false の間は、表単は「まだ埋まっていない中間態」—— 寸法が空で出力形式も
+ * 「入力と同じ」なら `validate` は「変換する指定がありません」を返すが、それは
+ * **利用者が何もしていないうちに出す警告**になる（原寸が届けば寸法が入って消える）。
+ * 判定そのものは消さず、出すのを待つためだけに使う。
+ */
+export function formSettled(s: ConvertState): boolean {
+  const path = representativePath(s);
+  return path != null && s.sourceInfo.has(path);
+}
+
 /** フォームの生値を解決済みの `ConvertOptions` にする。`null` は入力エラー（理由つき）。 */
 export function resolveOptions(form: ConvertForm): { options: ConvertOptions } | { error: string } {
   // 読み取りの規則は convertPlan（parseDim）が正本。画面の表示判定と同じ物を使う。
@@ -472,6 +507,44 @@ export const useConvertStore = create<ConvertState>()(
       preview: null,
       previewRendering: false,
       previewError: null,
+      engine: "cold",
+
+      /**
+       * **画像を渡さずにワーカー 1 本だけ起こす。**
+       *
+       * 起こすのが 1 本なのは、実体ごとに 1GiB の線形メモリを予約する（DESIGN §7.1）ため。
+       * 残りはバッチ実行時に自然に起きるが、そのときには HTTP キャッシュが温まっているので
+       * ダウンロードは要らない。
+       *
+       * `pool.hold()` を取るのは、画面切替の `releaseIdlePools()` が
+       * **温めている最中のプールを畳まない**ようにするため（キューは空なので暇に見える）。
+       *
+       * **毎回投げてよい。** 二度目が無駄にならないのは、ワーカー側の `getVips()` が
+       * 実体を記憶しているから（既に温まっていれば往復 1 回で即返る）。ここで
+       * 「`engine === "ready"` なら投げない」と早切りすると、画面を離れて戻ったときに
+       * `releaseIdlePools()` がプールを畳んでいても温かいと言い続けてしまう。
+       * 畳まないのは走行中だけなので、暇なときに畳まれるのは正常な経路。
+       */
+      warmEngine: () => {
+        // 走っている 1 本に畳む（画面が二度 mount してもダウンロードは重ねない）。
+        if (warming) return warming;
+        const releaseHold = pool.hold();
+        // 温かいまま再度起こすときは段階を戻さない（一瞬だけ「読み込み中」が瞬くのを防ぐ）。
+        if (get().engine !== "ready") set({ engine: "loading" });
+        warming = (async () => {
+          try {
+            await pool.get().submit({ op: "warm" }, []);
+            set({ engine: "ready" });
+          } catch {
+            // 前倒しの失敗は報せない（利用者が頼んだ仕事ではない）。次の機会に起こし直す。
+            set({ engine: "cold" });
+          } finally {
+            releaseHold();
+            warming = null;
+          }
+        })();
+        return warming;
+      },
 
       setForm: (patch) => set((s) => ({ form: { ...s.form, ...patch } })),
       setSources: (sources) => {

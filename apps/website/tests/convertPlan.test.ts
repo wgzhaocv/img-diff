@@ -17,6 +17,7 @@ import { findOutputCollisions, outPathFor } from "@/lib/convert";
 import { extOf, isConvertibleImage, isScannableImage, uniquePath } from "@/lib/imagePaths";
 import {
   DEFAULT_FORM,
+  formSettled,
   previewKey,
   previewSettled,
   rememberedForm,
@@ -572,5 +573,39 @@ describe("プレビューは原寸が届いてから作る", () => {
     await useConvertStore.getState().renderPreview();
     // 代表は 3 枚目なので、そこまでを要求する。
     expect(asked).toEqual([3]);
+  });
+});
+
+describe("待っている間の見せ方", () => {
+  const src = (path: string) => ({ path, bytes: () => Promise.resolve(new ArrayBuffer(0)) });
+  const info = { width: 1024, height: 1024, bytes: 1_700_000 };
+
+  it("原寸が届くまで表単は最終形ではない（formSettled）", () => {
+    useConvertStore.getState().setSources([src("a.png")]);
+    expect(formSettled(useConvertStore.getState())).toBe(false);
+    useConvertStore.setState({ sourceInfo: new Map([["a.png", info]]) });
+    expect(formSettled(useConvertStore.getState())).toBe(true);
+  });
+
+  it("その中間態こそが「変換する指定がありません」を出す（だから出すのを待つ）", () => {
+    // `setSources` が寸法欄を空にし、原寸の書き戻しは後から来る。その隙の validate は
+    // 素通し判定で警告を返す —— 利用者は何もしていないので、画面には出さない。
+    useConvertStore.getState().setSources([src("a.png")]);
+    useConvertStore.getState().setForm({ ...DEFAULT_FORM, width: "", height: "" });
+    expect(useConvertStore.getState().validate()).toMatch(/変換する指定がありません/);
+    expect(formSettled(useConvertStore.getState())).toBe(false);
+
+    // 原寸が届いて寸法が入れば、そもそも素通しではなくなる。
+    useConvertStore.setState({ sourceInfo: new Map([["a.png", info]]) });
+    useConvertStore.getState().setForm({ width: "800", height: "" });
+    expect(useConvertStore.getState().validate()).toBeNull();
+  });
+
+  it("エンジンは cold から始まり、選び直しでも戻らない（wasm は使い回す）", () => {
+    useConvertStore.getState().setSources([src("a.png")]);
+    expect(useConvertStore.getState().engine).toBe("cold");
+    useConvertStore.setState({ engine: "ready" });
+    useConvertStore.getState().setSources([src("b.png")]);
+    expect(useConvertStore.getState().engine).toBe("ready");
   });
 });

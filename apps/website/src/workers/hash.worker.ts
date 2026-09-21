@@ -1,15 +1,17 @@
 /// <reference lib="webworker" />
 import init, { flatten_and_dhash, flatten_on_white } from "@/wasm/imgdiff_wasm";
 import wasmUrl from "@/wasm/imgdiff_wasm_bg.wasm?url";
-import { convertBuffer, decodeCanonical, imageInfo } from "./vips";
+import { convertBuffer, decodeCanonical, getVips, imageInfo } from "./vips";
 import { extOf } from "@/lib/imagePaths";
 import { errText } from "@/lib/format";
 import type {
   ConvertResult,
   DecodeResult,
   HashResult,
+  ImageRequest,
   InfoResult,
   PixelResult,
+  WarmResult,
   WorkerRequest,
   WorkerResponse,
 } from "@/lib/hashTypes";
@@ -41,7 +43,7 @@ type Decoded =
 
 /// sha256（ファイルバイト）+ デコード（wasm-vips, SPEC §1 手順 1〜3）+ 白平坦化 & dHash（core, 手順 4〜8）。
 /// sha256 はデコード前に先に取る（digest は buffer を detach しないので後続の decode も有効）。
-async function decodeFull(req: WorkerRequest): Promise<Decoded> {
+async function decodeFull(req: ImageRequest): Promise<Decoded> {
   const sha256 = await sha256Hex(req.bytes);
   const bytes = req.bytes.byteLength;
   try {
@@ -55,7 +57,7 @@ async function decodeFull(req: WorkerRequest): Promise<Decoded> {
 }
 
 /// 1 パス目（scan）: sha256 + dHash + サムネ。全分解能 RGBA は使わないので返さない（GC される）。
-async function hashOne(req: WorkerRequest): Promise<HashResult> {
+async function hashOne(req: ImageRequest): Promise<HashResult> {
   const d = await decodeFull(req);
   if ("error" in d) {
     return {
@@ -83,7 +85,7 @@ async function hashOne(req: WorkerRequest): Promise<HashResult> {
 
 /// 2 パス目（dHash 衝突バケットのみ・SPEC §2.1）: 全分解能で再デコード → 白平坦化 → pixelSha256。
 /// CLI の `rgba_sha256`（pipeline.rs）と同じ「白平坦化後 RGBA の SHA-256」。
-async function pixelOne(req: WorkerRequest): Promise<PixelResult> {
+async function pixelOne(req: ImageRequest): Promise<PixelResult> {
   try {
     await ensureWasm();
     const { rgba } = await decodeCanonical(req.bytes, false, extOf(req.path));
@@ -103,7 +105,7 @@ async function pixelOne(req: WorkerRequest): Promise<PixelResult> {
 /// compare（2 枚比較）用: hashOne に加え、白平坦化後の全分解能 RGBA も返す（SPEC §3/§4）。
 /// 呼び出し側が compare_scores / diff_highlight に使う。全分解能デコードなので shrink-on-load は使わない
 /// （pixel 比較の正しさに全画素が要る）。
-async function decodeOne(req: WorkerRequest): Promise<DecodeResult> {
+async function decodeOne(req: ImageRequest): Promise<DecodeResult> {
   const d = await decodeFull(req);
   if ("error" in d) {
     return {
@@ -156,8 +158,24 @@ async function convertOne(req: Extract<WorkerRequest, { op: "convert" }>): Promi
   }
 }
 
+/**
+ * 画像を渡さずに**準備だけ**する。wasm-vips（約 11.9MB）と imgdiff-wasm を起こすので、
+ * 最初の 1 件がダウンロードとコンパイルを丸ごと背負わなくなる。
+ *
+ * **失敗しても投げない。** これは利用者が頼んだ仕事ではなく前倒しなので、
+ * ここで報せる相手が居ない（本当の理由は実際に変換したときに同じ経路で出る）。
+ */
+async function warmOne(): Promise<WarmResult> {
+  try {
+    await Promise.all([getVips(), ensureWasm()]);
+    return { op: "warm" };
+  } catch (e) {
+    return { op: "warm", error: errText(e) };
+  }
+}
+
 /// 表示用の情報だけを返す（原寸 + サムネ）。ハッシュも全分解能 RGBA も作らない。
-async function infoOne(req: { path: string; bytes: ArrayBuffer }): Promise<InfoResult> {
+async function infoOne(req: ImageRequest): Promise<InfoResult> {
   const bytes = req.bytes.byteLength;
   try {
     const { width, height, thumb } = await imageInfo(req.bytes, extOf(req.path));
@@ -185,25 +203,27 @@ self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
   const req = ev.data;
   // 未知の op を黙って hash として扱わない（増やしたのに配線し忘れたことに気づけるように）。
   const res =
-    req.op === "convert"
-      ? await convertOne(req)
-      : req.op === "info"
-        ? await infoOne(req)
-        : req.op === "pixel"
-          ? await pixelOne(req)
-          : req.op === "decode"
-            ? await decodeOne(req)
-            : req.op === "hash"
-              ? await hashOne(req)
-              : ({
-                  op: "hash",
-                  path: (req as { path: string }).path,
-                  sha256: "",
-                  phash: null,
-                  width: 0,
-                  height: 0,
-                  bytes: 0,
-                  error: `未知の op: ${String((req as { op: string }).op)}`,
-                } satisfies HashResult);
+    req.op === "warm"
+      ? await warmOne()
+      : req.op === "convert"
+        ? await convertOne(req)
+        : req.op === "info"
+          ? await infoOne(req)
+          : req.op === "pixel"
+            ? await pixelOne(req)
+            : req.op === "decode"
+              ? await decodeOne(req)
+              : req.op === "hash"
+                ? await hashOne(req)
+                : ({
+                    op: "hash",
+                    path: (req as { path: string }).path,
+                    sha256: "",
+                    phash: null,
+                    width: 0,
+                    height: 0,
+                    bytes: 0,
+                    error: `未知の op: ${String((req as { op: string }).op)}`,
+                  } satisfies HashResult);
   self.postMessage(res, transfersOf(res));
 };

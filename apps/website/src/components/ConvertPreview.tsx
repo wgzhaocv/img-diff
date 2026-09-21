@@ -9,6 +9,7 @@ import { baseNameOf } from "@/lib/imagePaths";
 import { IMAGE_FRAME } from "@/components/Thumb";
 import { cn } from "@/lib/utils";
 import { useObjectUrl } from "@/lib/useObjectUrl";
+import { Skeleton } from "@/components/ui/skeleton";
 import { previewKey, representativePath, useConvertStore } from "@/lib/stores/convertStore";
 
 // 今の設定で**実際に 1 枚変換して**結果を見せる（推定値ではない）。
@@ -33,6 +34,7 @@ export function ConvertPreview() {
   const renderPreview = useConvertStore((s) => s.renderPreview);
   const preview = useConvertStore((s) => s.preview);
   const rendering = useConvertStore((s) => s.previewRendering);
+  const loadingEngine = useConvertStore((s) => s.engine === "loading");
   const failure = useConvertStore((s) => s.previewError);
   const before = useConvertStore((s) => (path == null ? undefined : s.sourceInfo.get(path)));
 
@@ -112,7 +114,9 @@ export function ConvertPreview() {
           <div className={cn(IMAGE_FRAME, "aspect-square")}>
             {beforeUrl ? (
               <img src={beforeUrl} alt={`変換前: ${name}`} className="size-full object-contain" />
-            ) : null}
+            ) : (
+              <Skeleton className="size-full rounded-none bg-muted/60" />
+            )}
           </div>
           <figcaption className="text-xs text-muted-foreground">変換前</figcaption>
           {before && before.width > 0 ? (
@@ -131,6 +135,11 @@ export function ConvertPreview() {
                 className={cn("size-full object-contain", pictured !== shown && "opacity-50")}
               />
             ) : null}
+            {/* 絵が無い間だけ。**理由が出ているときは出さない** ——
+                「書き出せません」の横で脈打っていたら、まだ作っているように見える。 */}
+            {!afterUrl && error == null && (loadingEngine || rendering) ? (
+              <Skeleton className="size-full rounded-none bg-muted/60" />
+            ) : null}
             {afterUrl && !renderable ? (
               // wasm-vips は書けてもブラウザが描けない形式（jxl / tiff / ppm）。
               // 絵は諦めて、寸法とサイズだけ正しく見せる。
@@ -139,8 +148,11 @@ export function ConvertPreview() {
               </p>
             ) : null}
           </div>
+          {/* **何を待っているのかを言う**（UI.md §6）。エンジンの読み込みと生成は
+              待ち時間の性格が違う（前者は約 11.9MB のダウンロード・一度だけ）。 */}
           <figcaption className="text-xs text-muted-foreground">
-            変換後{rendering ? "（生成中…）" : null}
+            変換後
+            {loadingEngine ? "（エンジンを読み込み中…）" : rendering ? "（生成中…）" : null}
           </figcaption>
           {error != null ? (
             <div className="text-xs text-warning">{error}</div>
