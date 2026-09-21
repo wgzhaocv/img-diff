@@ -549,10 +549,28 @@ describe("プレビューは原寸が届いてから作る", () => {
   it("原寸を知らないうちは走らせない（走らせると二度手間の上に、大きすぎる画像を止められない）", async () => {
     useConvertStore.getState().setSources([src("a.png")]);
     useConvertStore.getState().setForm({ ...DEFAULT_FORM, format: "avif" });
+    useConvertStore.setState({ loadSourceInfo: () => Promise.resolve() });
     await useConvertStore.getState().renderPreview();
     expect(useConvertStore.getState().preview).toBeNull();
     expect(useConvertStore.getState().previewRendering).toBe(false);
     // **答えを書かずに戻る**＝まだ試していない。保存ボタンはここでは押せない。
     expect(previewSettled(useConvertStore.getState())).toBe(false);
+  });
+
+  it("原寸が無いときは取りに行かせる（中断で 1 枚だけ落ちていても詰まらない）", async () => {
+    // 中断はサムネの失敗を記録しないので、催促しないと鍵が二度と変わらず、
+    // プレビューも保存ボタンも永久に止まる（「もっと見る」が出ない枚数だと戻す手も無い）。
+    const asked: number[] = [];
+    useConvertStore.getState().setSources([src("a.png"), src("b.png"), src("c.png")]);
+    useConvertStore.getState().setPreviewPath("c.png");
+    useConvertStore.setState({
+      loadSourceInfo: (upTo) => {
+        asked.push(upTo);
+        return Promise.resolve();
+      },
+    });
+    await useConvertStore.getState().renderPreview();
+    // 代表は 3 枚目なので、そこまでを要求する。
+    expect(asked).toEqual([3]);
   });
 });

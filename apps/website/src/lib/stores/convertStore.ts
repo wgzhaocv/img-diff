@@ -535,7 +535,8 @@ export const useConvertStore = create<ConvertState>()(
           return;
         }
         const path = representativePath(state);
-        const src = state.sources.find((s) => s.path === path);
+        const at = state.sources.findIndex((s) => s.path === path);
+        const src = at < 0 ? undefined : state.sources[at];
         if (!src) return;
         // **原寸が届くまでは作らない。** 理由は 2 つあって、どちらも原寸が
         // `previewKey` の一部だから起きる（サムネと一緒に後から届く）:
@@ -544,8 +545,14 @@ export const useConvertStore = create<ConvertState>()(
         //   2. 届いた瞬間に鍵が変わる（寸法欄も原寸で埋まる・`prefillDimensions`）ので、
         //      先に始めた分は**捨てるために符号化する**ことになる。実測 1024×1024 の avif で
         //      4.2s → 8.5s。「選んだ直後だけ倍遅い」の正体はこれ。
-        // デコードできなかった画像も原寸 0 で**記録される**ので、ここで詰まることはない。
-        if (!state.sourceInfo.has(src.path)) return;
+        if (!state.sourceInfo.has(src.path)) {
+          // **無いなら催促する。** ここで黙って戻るだけにすると、中断でこの 1 枚の要求だけが
+          // 落ちていた場合（`loadSourceInfo` は中断を記録しない）、鍵が二度と変わらないので
+          // プレビューも保存ボタンも永久に止まる —— 「もっと見る」が無い枚数だと戻す手も無い。
+          // 取得中・取得済みは `loadSourceInfo` 側が弾くので、何度呼んでも二重には走らない。
+          void get().loadSourceInfo(at + 1);
+          return;
+        }
         const resolved = resolveOptions(state.form);
         // 入力が不正なときは黙って前の絵を残す（理由は実行ボタンの下に出ている）。
         if ("error" in resolved) return;

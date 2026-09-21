@@ -87,6 +87,12 @@ export function ConvertPreview() {
   const stale = shown == null && error == null && preview?.path === path ? preview : null;
   const pictured = shown ?? stale;
   const afterUrl = useObjectUrl(pictured?.blob ?? null);
+  // **保存リンクの href は絵とは別に採る。** `useObjectUrl` は effect で URL を張り替えるので、
+  // 新しい結果が届いた最初の 1 フレームは `shown` だけが新しく `afterUrl` はまだ古い blob を指す。
+  // 1 つで兼ねると、その 1 フレームだけ「新しい名前で古い画像を保存する」リンクになる
+  // （前の絵を残すようにして初めて届くようになった隙間 —— 以前は url も null だったので
+  //   ボタン自体が出ていなかった）。
+  const savableUrl = useObjectUrl(shown?.blob ?? null);
   const renderable = pictured != null && isBrowserRenderable(pictured.format);
 
   if (path == null) return null;
@@ -152,10 +158,10 @@ export function ConvertPreview() {
         </figure>
       </div>
 
-      {afterUrl && shown ? (
+      {savableUrl && shown ? (
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="outline" size="sm" asChild>
-            <a href={afterUrl} download={outPathFor(name, shown.format)} className="gap-1.5">
+            <a href={savableUrl} download={outPathFor(name, shown.format)} className="gap-1.5">
               <Download className="size-4" />
               保存
             </a>
