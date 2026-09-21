@@ -5,7 +5,6 @@ import { ConvertPicker } from "@/components/ConvertPicker";
 import { ConvertPreview } from "@/components/ConvertPreview";
 import { ConvertProgress } from "@/components/ConvertProgress";
 import { ConvertResult } from "@/components/ConvertResult";
-import { ConvertRunBar } from "@/components/ConvertRunBar";
 import { ConvertSources } from "@/components/ConvertSources";
 import { useConvertStore } from "@/lib/stores/convertStore";
 
@@ -34,11 +33,10 @@ export function ConvertScreen() {
             <ConvertPreview />
             <ConvertSources />
           </div>
-          {/* 右 = 設定と実行。 */}
+          {/* 右 = 設定と、保存先を兼ねた実行。 */}
           <div className="space-y-6">
             <ConvertOptions />
             <ConvertDestination />
-            <ConvertRunBar />
           </div>
         </div>
       ) : (

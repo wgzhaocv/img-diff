@@ -72,7 +72,6 @@ export type ConvertForm = {
    * 「何も指定していない」と区別するために要る（参照実装の「`q` を明示したら再符号化」と同じ）。
    */
   qualityTouched: boolean;
-  destination: Destination;
   /** 出力先に同名が在るとき上書きするか（既定は安全側の false＝ skip）。 */
   overwrite: boolean;
 };
@@ -86,7 +85,6 @@ export const DEFAULT_FORM: ConvertForm = {
   format: "",
   quality: 80,
   qualityTouched: false,
-  destination: "folder",
   overwrite: false,
 };
 
@@ -100,6 +98,8 @@ export const DEFAULT_FORM: ConvertForm = {
  * - `width` / `height`: 画像に付随する値。毎回その画像の原寸から始める
  *   （前回の 1280 が今回の画像にとって意味を持つとは限らない）。
  * - `overwrite`: 破壊的になり得る切替は既定を安全側に戻す（UI.md §6.1）。
+ * - 出力先（フォルダ / zip）: **フォームの値ではない**。押したボタンがその場で決める
+ *   （`ConvertDestination`）ので、覚えておいても画面に出す先が無い。
  *
  * `quality` と `qualityTouched` は**対で**残す（片方だけ戻ると、画質が復活したのに
  * 再符号化されない＝黙って無視される状態になる）。
@@ -122,7 +122,6 @@ const REMEMBERED: {
     typeof v === "string" && (v === "" || WRITABLE_FORMATS.includes(v)) ? v : undefined,
   quality: (v) => (typeof v === "number" ? clampQuality(v) : undefined),
   qualityTouched: (v) => (typeof v === "boolean" ? v : undefined),
-  destination: (v) => (v === "folder" || v === "zip" ? v : undefined),
 };
 
 /** 記憶する部分だけの形。ここに欄を足すと `REMEMBERED` の検証も必須になる（型で強制される）。 */
@@ -231,7 +230,11 @@ export type ConvertState = {
   preview: PreviewResult | null;
   /** プレビューを作っている最中か（結果は `preview`、失敗は `previewError`）。 */
   previewRendering: boolean;
-  previewError: string | null;
+  /**
+   * 直近の失敗。**どの入力に対する失敗かを鍵ごと持つ** —— 文字列だけだと、設定を変えた後も
+   * 古い理由が新しい絵の横に残り、「押せない理由」としても効いてしまう。
+   */
+  previewError: { key: string; message: string } | null;
   setPreviewPath: (path: string | null) => void;
   setForm: (patch: Partial<ConvertForm>) => void;
   setSources: (sources: ConvertSource[]) => void;
@@ -339,6 +342,21 @@ export function previewKey(s: ConvertState): string {
   return "error" in resolved
     ? `invalid:${path}`
     : `${path}\n${dims}\n${JSON.stringify(resolved.options)}`;
+}
+
+/**
+ * **今の設定で 1 枚を試し終えたか。** 保存ボタンはこれが立つまで押せない
+ * （変換の結果を見ないまま書き出させない・UI.md §6.1）。
+ *
+ * 「成功したか」ではなく「試し終えたか」で見る —— 代表 1 枚が書けない形式でも、
+ * バッチの残りは変換できる。全件が駄目なときは `validate` が別に止める。
+ */
+export function previewSettled(s: ConvertState): boolean {
+  // 変換中は押せないので判定も要らない。**進捗は秒間数百回**更新されるので、
+  // ここで毎回 `previewKey` を組み立てないように先に切る。
+  if (s.previewRendering || s.status === "converting") return false;
+  const key = previewKey(s);
+  return s.preview?.key === key || s.previewError?.key === key;
 }
 
 /** フォームの生値を解決済みの `ConvertOptions` にする。`null` は入力エラー（理由つき）。 */
@@ -524,15 +542,15 @@ export const useConvertStore = create<ConvertState>()(
         if ("error" in resolved) return;
 
         const srcFormat = extOf(src.path);
+        const key = previewKey(state);
         // 書けない・大きすぎるなら試さずに理由を出す（実行ボタンの下と同じ文言を絵の側でも）。
         const reason = writeBlockFor(state, resolved.options, src.path);
         if (reason) {
-          set({ previewRendering: false, previewError: reason });
+          set({ previewRendering: false, previewError: { key, message: reason } });
           return;
         }
 
         const gen = sourcesGen;
-        const key = previewKey(state);
         previewBusy = true;
         const releaseHold = pool.hold();
         set({ previewRendering: true, previewError: null });
@@ -558,8 +576,15 @@ export const useConvertStore = create<ConvertState>()(
         } catch (e) {
           if (gen !== sourcesGen) return;
           // 中断（プール破棄）はプレビューの失敗ではない。
-          if (e instanceof PoolAbortError) return;
-          set({ previewError: errText(e) });
+          // 中断はプレビューの失敗ではないが、**鍵に対する答えは必ず書く** ——
+          // 黙って戻ると成功でも失敗でもない宙ぶらりんになり、保存ボタンが押せないまま固まる。
+          // やり直さないのは、止めろと言われた仕事をすぐ始め直さないため
+          // （画面に戻れば `ConvertPreview` の効果が改めて呼ぶ）。
+          if (e instanceof PoolAbortError) {
+            set({ previewError: { key, message: "中断しました" } });
+            return;
+          }
+          set({ previewError: { key, message: errText(e) } });
         } finally {
           releaseHold();
           previewBusy = false;
@@ -637,9 +662,15 @@ export const useConvertStore = create<ConvertState>()(
         }
         // **書けない / 大きすぎる**を実行前に止めるのは、**全件が駄目なとき**だけ。
         // 1 枚の heic を巻き添えに 999 枚を止めない（昔どおり per-file の失敗として記録する）。
-        const reasons = sources.map((src) => writeBlockFor(get(), resolved.options, src.path));
-        if (reasons.length > 0 && reasons.every((r) => r != null)) return reasons[0];
-        return null;
+        // 書ける 1 枚が見つかった時点で打ち切る（数千枚で毎回全件の計画を立て直さない）。
+        const state = get();
+        let first: string | null = null;
+        for (const src of sources) {
+          const reason = writeBlockFor(state, resolved.options, src.path);
+          if (reason == null) return null;
+          first ??= reason;
+        }
+        return first;
       },
 
       validateCollisions: () => {

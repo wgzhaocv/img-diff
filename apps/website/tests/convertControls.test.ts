@@ -4,6 +4,8 @@ import {
   gravityFromParts,
   gravityParts,
   projectGravity,
+  presetWidths,
+  PRESET_WIDTHS,
   qualityApplies,
   relevantControls,
   WRITABLE_FORMATS,
@@ -265,5 +267,29 @@ describe("バッチ全体で判断する（代表 1 枚で隠さない）", () =
         ],
       ).background,
     ).toBe(false);
+  });
+});
+
+describe("よく使う幅の早押し（presetWidths）", () => {
+  const w = (...widths: number[]): { width: number }[] => widths.map((width) => ({ width }));
+
+  it("一番大きい原寸より小さい幅だけを返す", () => {
+    expect(presetWidths(w(6000))).toEqual(PRESET_WIDTHS);
+    expect(presetWidths(w(1000))).toEqual([828, 750, 640, 384]);
+  });
+
+  it("原寸ちょうどの幅は出さない（拡大しない縛りで何も起きない）", () => {
+    expect(presetWidths(w(1920))[0]).toBe(1200);
+  });
+
+  it("バッチでは一番大きい 1 枚が基準（1 枚でも縮むなら選ぶ意味がある）", () => {
+    // 一番小さい 500 を基準にすると 384 しか残らない。大きい方で判断していることを見る。
+    expect(presetWidths(w(500, 1000, 800))).toEqual([828, 750, 640, 384]);
+  });
+
+  it("階段より小さい画像や、原寸が分からないうちは何も出さない", () => {
+    expect(presetWidths(w(384))).toEqual([]);
+    expect(presetWidths([])).toEqual([]);
+    expect(presetWidths(null)).toEqual([]);
   });
 });

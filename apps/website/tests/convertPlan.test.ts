@@ -462,7 +462,7 @@ describe("次に開いたときも残す設定", () => {
   it("寸法と上書きは残さない（寸法は画像に付随・上書きは安全側へ戻す）", () => {
     const keys = Object.keys(rememberedForm(DEFAULT_FORM)).sort();
     expect(keys).toEqual(
-      ["background", "destination", "fit", "format", "gravity", "quality", "qualityTouched"].sort(),
+      ["background", "fit", "format", "gravity", "quality", "qualityTouched"].sort(),
     );
   });
 

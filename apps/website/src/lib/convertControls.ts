@@ -165,6 +165,31 @@ export function relevantControls(
 }
 
 /**
+ * **よく使う幅の階段。** Next.js の `Image` が responsive 用に焼き分ける既定の幅と同じ
+ * （`deviceSizes` の 8 本 + `imageSizes` の最大である 384）。
+ *
+ * 高さは与えない —— 幅だけの指定は `planGeometry` が等比縮小として扱うので、
+ * どの縦横比の画像に押しても歪まない（Next.js が `srcset` を作るときと同じ意味論）。
+ * 降順で持つ: 画面には大きい方から並べる（原寸に近い側が左）。
+ */
+export const PRESET_WIDTHS = [3840, 2048, 1920, 1200, 1080, 828, 750, 640, 384];
+
+/**
+ * 実際に縮む幅だけを返す。原寸以上は「拡大しない」縛り（SPEC §5.4 規則 1）で何も起きないので、
+ * 押せる選択肢として出さない。
+ *
+ * 基準は**分かっている入力のうち最大の幅**で、`relevantControls` と違い**全件が揃うのを待たない**。
+ * 差は危険度にある: 寄せる位置を早まって隠すと見えない設定が画像を切り落とすが、
+ * 幅の選択肢が 1 つ余分に出ても、押さなければ何も起きないし押しても等比に縮むだけ。
+ * サムネは先頭から順にしか取らないので、待つと大きなバッチで階段が丸ごと消える。
+ */
+export function presetWidths(srcs: { width: number }[] | null | undefined): number[] {
+  let max = 0;
+  for (const s of srcs ?? []) max = Math.max(max, s.width);
+  return PRESET_WIDTHS.filter((w) => w < max);
+}
+
+/**
  * gravity の x / y 成分。**値の名前がそのまま `<y><x>` になっている**ので表は要らない
  * （`northwest` = north + west、`west` = west だけ、`center` = どちらも無し）。
  */

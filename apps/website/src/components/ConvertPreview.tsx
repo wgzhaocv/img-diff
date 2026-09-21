@@ -33,7 +33,7 @@ export function ConvertPreview() {
   const renderPreview = useConvertStore((s) => s.renderPreview);
   const preview = useConvertStore((s) => s.preview);
   const rendering = useConvertStore((s) => s.previewRendering);
-  const error = useConvertStore((s) => s.previewError);
+  const failure = useConvertStore((s) => s.previewError);
   const before = useConvertStore((s) => (path == null ? undefined : s.sourceInfo.get(path)));
 
   useEffect(() => {
@@ -75,6 +75,8 @@ export function ConvertPreview() {
   // **今の入力から作った結果だけ**を出す。path だけで突き合わせると、設定を変えた直後や
   // 失敗したときに古い絵が残り、それを「今の結果」として保存・コピーできてしまう。
   const shown = preview?.key === key ? preview : null;
+  // 失敗の理由も**今の入力に対するもの**だけ出す（設定を変えたら前の理由は消える）。
+  const error = failure?.key === key ? failure.message : null;
   const afterUrl = useObjectUrl(shown?.blob ?? null);
   const renderable = shown != null && isBrowserRenderable(shown.format);
 
