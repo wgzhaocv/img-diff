@@ -65,269 +65,51 @@
 - localStorage の**書き込み**が投げる環境で、変換の開始処理ごと巻き添えになっていた。
 - 背景色の検証が、その欄が使われない設定（切り抜き）でも実行を止めていた。
 
-**web の HEIC は読めない（判明した制限・未対応）**: wasm-vips 0.0.18 の libheif は
-**HEVC のデコーダを含まない**（`Support for this compression format has not been built in`）。
-AVIF は読める。`SCANNABLE_EXTS` / `CONVERTIBLE_EXTS` は heic / heif を含んだままなので、
-iPhone の写真は web では 1 枚ずつ失敗する（CLI は native libvips なので問題ない）。
-画面上は「読み込めません」と出るようにしたが、**拡張子の集合を直すか案内を足すかは未決**。
+**web の HEIC を読めるようにした（済・2026-09-21）**: wasm-vips 0.0.18 の libheif は
+**HEVC を持たない**（AVIF は読める）ので、HEIC だけ `libheif-js`（libde265 入り）で RGBA へ
+解いてから wasm-vips に渡す（`workers/heic.ts`）。**HEIC が来るまで取りに行かない**
+（転送 gzip 0.48MB。実測で HEIC 無しの選択では取得 0 件）。scan / compare / convert の全部で効く。
 
-### 1. 配布（Windows 完了・macOS 完了(pre-release)・Linux 未着手）
+- 画素は原生 libvips と一致しない（最大差 11 / SSIM 0.99753）が、**dHash は一致**（hamming 0）。
+  根拠と保証の範囲は SPEC §1「デコーダは両端で別物である」、検査は `scripts/check-heic-parity.sh`。
+- **読めても書けない**（heic は出力形式に無い）。「変換が要るのに書けない形式」は
+  実行前に `validate` が止める（svg も同じ経路で救われる）。
 
-- **web の install ページ**: 完了（Phase 4b）。macOS タブはプレビルド配布（`curl | bash`）に差し替え済み。
-- **macOS パッケージ 完了（v0.1.6 / `aarch64-apple-darwin`）**: `scripts/package-macos.sh`。
-  `dylibbundler` で dylib 閉包（76 個 / 55MB）を集めて `@executable_path/../lib` へ書き換え + ad-hoc 署名、
-  `vips-heif` / `vips-jxl` モジュール同梱、`ditto -c -k --keepParent` で zip。
-  **macOS 26+ / Apple Silicon 専用**（Homebrew ボトルの `LC_BUILD_VERSION minos` が 26.0 のため。
-  それより古い macOS では dyld が読み込みを拒否する）。導入は `apps/website/public/install.sh`。
-  - **macOS 固有の要点（触る前に読む）**: libvips は macOS で自分の位置を知れず、
-    **ビルド時プレフィックスが argv0 より先に試される** → 何もしないと同梱 libvips が
-    `/opt/homebrew/Cellar` 側のモジュールを dlopen し **1 プロセスに libvips が 2 つ**載る。
-    `decode.rs::set_bundled_vipshome` が VIPSHOME で束ルートへ向けて断つ。検証は PATH を剥がすだけでは
-    **不十分**（dlopen は PATH と無関係）。`DYLD_PRINT_LIBRARIES=1` で libvips の像が 1 つか数えること。
-  - **繰延べ**: fontconfig の設定パス（`/opt/homebrew/etc/fonts`）は同梱していないので、
-    `render` で**文字入り SVG** を描くとフォントが代替される。scan/compare/HEIC には影響なし。
-- **リリース済み**: [v0.1.6](https://github.com/wgzhaocv/img-diff/releases/tag/v0.1.6) を **pre-release** で公開
-  （資産 = mac zip + `manifest.json` + `manifest-aarch64-apple-darwin.json`）。v0.1.5 も pre-release の
-  まま残してある（差分は「存在しないフォルダを scan/clean/find が `not_found` で断る」修正のみ）。
-  web も Polaris へ本番反映済み（`polar static deploy`。19 ファイル / public / `anon_seq` 11）。
-  **`releases/latest` は v0.1.4 のまま**＝ Windows の導入と自己更新は無傷（API で確認済み）。
-  実機で `curl | bash`（素の環境と既存上書きの両方）→ `--version` 0.1.6 → scan（HEIC/AVIF/JXL）→
-  `not_found` の確認まで通した。束の中の libvips が 1 つだけであることも `DYLD_PRINT_LIBRARIES` で再確認。
+**未解決として残るもの**:
 
-- **▶ 次にやる収尾（Windows 機で。この順に）**:
-  1. `bash scripts/package-windows.sh` → `target/win-package/` に zip と `manifest-x86_64-pc-windows-gnu.json`
-  2. mac 側の断片を v0.1.6 のリリース資産から取る
-     （`gh release download v0.1.6 -p 'manifest-aarch64-apple-darwin.json'`。
-     ローカルの `target/macos-package/` は `cargo clean` で消えるので**リリースから取る**）
-  3. `bash scripts/merge-manifest.sh manifest.json manifest-*.json` → 2 target 入りの `manifest.json`
-  4. `gh release upload v0.1.6 --clobber <win zip> manifest.json manifest-x86_64-pc-windows-gnu.json`
-  5. `gh release edit v0.1.6 --prerelease=false` で **latest に昇格**
-  6. `apps/website/public/install.sh` の `BASE` を `https://github.com/$REPO/releases/latest/download` に戻して
-     `TAG` を消す。`InstallScreen.tsx` の `MACOS_RELEASE_URL` を `RELEASES_URL` に統一。deploy。
-     （`package-macos.sh` の tag 固定チェックは「tag を書いていなければ素通し」なので、
-     この片付けをしても検査は壊れない。）
-- **Linux パッケージ 未着手**。install ページは `cargo install` 案内のまま。
-- **CI 化（未着手・macOS の被覆を広げるため）**: この repo にはまだ workflow が 1 つも無い。
-  `macos-15` runner で焼けば macOS 15+ を、`macos-13` なら Intel 版も賄える。
-  `scripts/package-macos.sh` はそのまま載る（brew install vips libheif dylibbundler を足すだけ）。
+- SPEC §1 が要求する**固定画像の golden 夹具は依然として未実装**。`crates/wasm` の parity は
+  合成 RGBA から始まるので**デコーダを 1 つも通らない**。今回 `tests/fixtures/sample.heic` と
+  `check-heic-parity.sh` で HEIC だけは塞いだが、jpg/png 等は手動確認のまま。
+- `SCANNABLE_EXTS` と CLI 既定 `--ext` が **`tif` と `svg` でずれている**（web だけが拾う）。
+  `imagePaths.ts` のコメントは「揃える」と言っているので、どちらかに寄せる必要がある。
 
-#### 配布まわりで「やった方が良いが今回は見送った」もの
+### Codex 性能レビュー（gpt-5.6-sol/high）— 対応済みと残り
 
-レビュー（simplify 4 エージェント + codex gpt-5.6-sol）で挙がって、代価が今回の範囲を超えるので
-繰延べた設計変更。**やるなら上の Windows 収尾より後**（今の仕組みは Windows 側が現に依存している）。
+**実測して否定した提案**（再検討しないための記録）:
 
-- **(a) 束の身元を標記ファイルで持つ。** 今は「exe の親が `bin`」という**形**で同梱パッケージか判定して
-  いる（`util::bundle_root`）。`cargo install --root ~/.local` でも成立してしまうので、`decode` は
-  「モジュールディレクトリが実在するか」、`update` は「bin レイアウトか」と**呼び出し側が別々に**
-  条件を足している。打包時に `lib/imgdiff-bundle.json`（version / target / modulesDir）を書いて
-  それを探す形にすると、判定が**推定から事実に**変わり、条件の重複も消える。
-- **(b) 資産名から版番号を落とす**（`imgdiff-<target>.zip`）。そうすると install 系は
-  `releases/latest/download/imgdiff-<target>.zip` を直に取れて、**manifest も断片も合成も要らなくなる**
-  ＝ プラットフォームごとに完全に独立して発版できる。今の「1 つの release に完全な manifest が
-  ちょうど 1 つ」という前提は、単プラットフォームの hotfix を出すたびに手作業の合成を要求する。
-  **移行時の注意**: 既存の v0.1.4 の資産は版番号入りなので、切り替えは新しい資産が両 target
-  揃ってからでないと Windows の導入が 404 になる。
-- **(c) `version_check` と `update` の GitHub クライアントが二重**（`REPO` 定数・ureq Agent・
-  ヘッダ・`releases/latest` の URL・`Release{tag_name}` の deser が両方に在る）。片方に寄せる。
-  タイムアウトだけは意図的に違う（1.5s の静かな探査 / 180s のダウンロード）ので引数に残すこと。
-- **(d) 小物**: `version_check::state_path` が `index::default_cache_dir()` を使っていない
-  （キャッシュ場所の定義が 2 箇所）／`now_epoch` が `util::now_rfc3339` の中身と重複。
+- **プール本数を減らす**という提案は**速度には根拠が無い**。24 枚を変換した実測は
+  pool=1 713ms / 2 406ms / 4 244ms / **8 164ms**（4.35 倍）。外層の並列は効いている。
+  懸念のうち正しいのはメモリの方なので、本数ではなく**画面を離れたら畳む**で対応した。
+- **`createImageBitmap` + `OffscreenCanvas`** は今のサムネ経路より遅い。
+  640×360 では 5ms 対 9ms で勝つが、**4000×3000 では 22ms 対 10ms で 2.2 倍遅く**、
+  サムネも大きい（632B 対 362B）。shrink-on-load が 1/8 解像度で読むぶん、勝負にならない。
 
-### 2. web（Phase 0〜3b サムネまで完了・commit 済。scan は実用レベルで動作）
+**対応済み**: プールを画面離脱で畳む（走行中は畳まない）/ scan の進捗を raf 合流
+（`lib/rafThrottle.ts` を convert と共有）+ 進捗の購読を `ScanProgress` に隔離。
 
-**▶ 再開時の次アクション（新しい chat はまずここを読む）**
+**残り**（別途）:
 
-- **現状（配信先は Polaris の静的サイト 1 本 = `https://img-diff.static.tools.nextop.asia/`・public）**:
-  - **scan**（フォルダ重複検索）+ **compare**（2枚比較）+ **convert**（形式変換・§2.5）+ **install ページ**が動作。
-    全経路で **web dHash==CLI**。
-  - **前回フォルダ再スキャン**（idle に「前回のフォルダ」チップ→click 内 read 権限→キャッシュ突合で高速再スキャン）、
-    **scan-time キャッシュ GC**（列挙に無くなった path の hashes/thumbs 掃除）、**pixelSha256 golden**（native==wasm）を追加（commit `af529e9`・下記 §3）。
-  - compare = 並べて / 境界スライダ / 差分ハイライト(canvas) + SSIM/PSNR/差分割合/ハミング等幅表示 + 段階進捗（読込→計算→差分）。
-  - **ライブラリ化済**（ユーザー指摘「何でも手搓するな」[[prefer-libraries-not-handrolled]]）:
-    ルーティング=**react-router v8**（`BrowserRouter`+`Routes`+`NavLink`・**URL は `#` なしのクリーンパス** `/compare` 等）、
-    状態=**zustand**（`src/lib/stores/scanStore.ts`・`compareStore.ts`＝ルート切替でも結果/選択/進捗/**ワーカープール**保持・
-    props ドリリング解消。`DuplicateGroups` は結果をストア直読み）、before/after=**react-compare-slider**、
-    perceptual しきい値=**shadcn Slider**（`components/ui/slider.tsx`・0〜32・debounce は画面側）。
-  - catalog（root package.json）の **vite-plus/vite を `0.2.2` に固定**（`latest` が root/workspace で割れ、vite の
-    Plugin 型が二重定義になり型崩れ→版固定で単一化。今後 `vp add` 後に型崩れしたらまずここを疑う）。
-  - UI 文言は日本語（「査重」等の中国語は排除。scan タブ=「重複を探す」）。**install ページ 実装済**（commit `5d3460d`）:
-    OS タブ（Windows/macOS/Linux・detectOS で既定自動判定）・コピー可能な `CopyBlock`・Windows=`irm|iex` / macOS/Linux=`cargo install --git`・
-    AI 手順書=`npx skills add`。**agent-browser で E2E 検証済**（このページはネイティブダイアログ不要）。simplify=4エージェント + codex review 反映。
-- **Phase 3b / 4a / 4b すべて完了・本番デプロイ済（version `894e5f89`）。web の主要 3 画面（scan / compare / install）は完成。**
-  - **繰延べ**: (C-3) グループ仮想化・(C-4) shrink-on-load は「先に計測・実利が出てから」方針で未着手（§3 (C) 参照）。
-  - FS Access 経路（実削除・前回フォルダ再スキャン・GC）は E2E 未検証のままユーザー指示で直接デプロイ（不具合が出たらこの経路を疑う）。
-  - **次の候補 = 配布の拡充（§1）**: GitHub での実リリース作成（`latest` を実在させないと install の `irm|iex` が失敗）・Linux/Mac バイナリ + release。
-    install ページのコマンドは正しいが、GitHub Releases に実体が無いと Windows one-liner は動かない点に注意。
-- **検証環境（重要・更新）**: このセッションには **`agent-browser` skill が利用可能**（実ブラウザ駆動＝
-  compare や FS Access もスクショ/操作で確認できる可能性あり。まず試す）。**`codex:setup`/`codex:rescue` skill も存在**
-  （setup で CLI 準備を確認してから rescue を回す。以前「codex 未インストール」と記録したが skill 経路が来た）。
-  ただし FS Access の**フォルダ選択ダイアログ自体**はネイティブなので、確実なのは依然 `vp dev` 手動確認。
-- **仕上げレビュー**: 各まとまりで simplify=4 エージェント並列（reuse/simplification/efficiency/altitude）
-  [[simplify-means-4-agent-review]]。※直近は Anthropic 側 session limit で一部しか回らず inline 代替した回あり。
-  破壊的な実削除は特に念入りに（codex rescue も可能なら併用）。
-- **手順**: 実装 → レビュー反映 → `vp check`（型/lint/整形）→ `vp build` → 検証 → master 直接コミット
-  [[commit-directly-no-branch]] → `cd apps/website && polar static deploy ./dist --name img-diff`
-  → `polar static files img-diff` で全階層を確認。
-  ビルドに mingw PATH 不要（wasm pkg は `apps/website/src/wasm` にコミット済）。
-- **配信先は Polaris の静的サイト 1 本**（2026-09-19 に利用者が決定）:
-  `https://img-diff.static.tools.nextop.asia/`・visibility `public`・インストーラ（install.ps1 /
-  install.sh）もここから配る。`_headers` の COOP/COEP は Polaris でも効いている（実測済み）。
-  - **Cloudflare（imgdiff.wgzhao.me）へはもう出さない。** 落とすかどうかは後日判断（`apps/website/wrangler.jsonc`
-    は残してある）。
-  - 利用者は「安定したら visibility を `company` に戻す」意向。戻すと社外からの `curl | bash` は
-    切れるが、**それは許容すると利用者が明言**しているので追加作業は不要。
-- **このセッションの commit（新しい順）**: `580edec`(Slider) `e981c1a`(選択ボタン hover 修正＝secondary→primary +
-  wasm init を `{module_or_path}` に＝deprecated 警告解消) `2cffc16`(todo) `0723630`(査重→日本語) `b5454f5`(react-router+
-  zustand+react-compare-slider 採用・手書きルータ削除) `76b7120`(進捗表示/スライダ/`#`廃止/タブ状態保持の初版※後で b5454f5 が上書き)
-  `f6195ae`(todo) `8ca0b62`(compare Phase 4a)。作業ツリーはクリーン想定。
+- compare の採点と diff を worker へ（今は主線程で wasm。4000×3000 ×2 で 96MB 入 / 48MB 出のコピー）。
+- 重複結果の一覧を仮想化（DESIGN §3 で想定済み・未実装）。
+- **やらないと判断**: WebCodecs `ImageDecoder`、応用層の SharedArrayBuffer、
+  `WebAssembly.Module` の共有（常駐メモリは減らない）。
 
-- **Phase 0 完了**: `crates/wasm`（wasm-bindgen）+ native==wasm parity 検証（上記「完成済み」参照）。
-- **Phase 1 完了（commit 済 7fc1b54）**: React 化 + UI 骨格。4 エージェントレビュー反映済み。
-  **shadcn/ui + Tailwind v4** を土台に、`src/index.css` で
-  UI.md トークンを shadcn の意味変数へ写像（Teal・WCAG AAA・反AI・亮/暗）。scan / compare / install の
-  シェル + ハッシュルータ + テーマトグル。`vp dev`（localhost:5173）で実機確認済（亮/暗・3画面・コンソール綺麗）。
-  型/lint/整形（`vp check`）緑。UI スタックの約束は記憶 [[web-ui-stack-shadcn-tailwind]] 参照。
-  ※ scan/compare の実処理は未結線（Phase 2/3）。ボタンは現状プレースホルダ（toast）。
-- **Phase 2 完了（commit 済 0705469）**: ワーカープール + wasm-vips デコード。Web Worker（wasm-vips
-  でデコード → imgdiff-wasm で dHash、sha256 は crypto.subtle）を固定プールで並列処理。**実機で web の
-  dHash が CLI と一致確認済み**（`workers/vips.ts::decodeCanonical` は CLI decode.rs と同順）。error 耐性
-  （onerror で reject+補充）・中断ガード・shadcn Progress・4 エージェントレビュー反映済み。scan 実処理は動作、
-  ただしグループ化・キャッシュ・削除は未（Phase 3）。**要計測（Phase 3）**: pthread 過剰購読・N×vips メモリ・
-  shrink-on-load（DESIGN §7.1）。
-- **Phase 3 完了（commit 済 b481b79）**: scan オーケストレーション + グループ表示。runScan（1 パス目
-  sha256+dHash → dHash 衝突バケットのみ 2 パス目 pixelSha256、SPEC §2.1）→ cluster_group（メイン/wasm）で
-  厳密度別（exact/pixel/perceptual + 閾値・切替は再スキャン不要・閾値は debounce）→ DuplicateGroups（keeper
-  「残す」・回収容量・チェッカー背景サムネ）。skipped 表示・同名 drop の取りこぼし回避・format 正規化。
-  **共有契約 `schema` の型（Strictness/ImageRecord/DupGroup）を website から再利用**（手書き重複を解消）。
-  **実機検証済み**（重複ペアがグループ化・3 モード切替・web dHash==CLI）。4 エージェントレビュー反映済み。
-- **Phase 3b 基盤 完了（commit 済 d8201b2）**: File System Access + IndexedDB hashes キャッシュ。
-  `lib/db.ts`（idb・roots/jobs/hashes/thumbs スキーマ・逐次 putHash・storage.persist）、`lib/fsaccess.ts`
-  （showDirectoryPicker・isSameEntry で rootId 安定化・再帰列挙）、`lib/scan.ts::scanFolder`（列挙−突合→ミス分
-  だけ hash→pixelSha256、キャッシュ再利用）。runScan と 2 パス目を共通 seam `secondPassPixels` に統一。
-  3 エージェントレビュー反映（F1 StrictMode の abortedRef 致命バグ・F2 per-file skip・F3 SPEC§2.1 presence
-  再導出・F5 leak 防止・F6 失敗非キャッシュ・列挙並列化 ほか）。tsc/lint/build 緑、File[] 回帰は preview 検証済み。
-  ※ **FS Access のフォルダ選択はネイティブダイアログのため agent-browser 自動検証不可 → 要 `vp dev` 手動確認**。
-- **Phase 3b サムネ 完了（commit 済 ca2e88e）**: worker がデコード時に ~256px webp サムネ生成（premultiply
-  で透過エッジ対策）→ File[] は thumbByPath / FS Access は IDB thumbs（putThumb は best-effort）。Thumb は
-  thumb Blob→IDB→原 File の優先度。実機（File[]）でサムネ表示検証済み。2 エージェントレビュー反映（thumb 失敗を
-  非致命に・putThumb を quota 耐性に・thumb を transfer）。**要計測（DESIGN §6 は許容）**: 全画像 eager encode /
-  File[] の thumbByPath O(N) メモリ（表示は重複メンバのみ）。cache-hit 画像のサムネ backfill は未（file 表示で代替）。
-- **Phase 4a 完了（commit 済 8ca0b62）**: compare（2 枚比較）。worker に op="decode" 追加（白平坦化後の
-  全分解能 RGBA を transfer で返す。hashOne/decodeOne は共通 `decodeFull` を op ごとに射影＝重複解消）→
-  主線程 core の `compareScores`/`diffHighlight`/`hammingHex`（CompareScores は getter 読取後に free）で
-  ペア演算。`lib/compare.ts`（sha/dims/hamming + dimsEqual 時に SSIM/PSNR/差分割合/差分RGBA。pixelEqual は
-  差分割合0で導出＝tolerance0 でバイト一致と同値）→ `CompareView`（総合判定 + 等幅メトリクス + 並べて/
-  境界スライダ/差分canvas）・`ImageSlot`（ドロップ/選択+プレビュー）・`useObjectUrl`。数値の正しさは
-  native==wasm の golden parity（crates/wasm）が既に保証。**`schema` の exports import を src へ**（値 import
-  `HASH_BITS` を解決。型は元々 src 参照）。simplify レビュー反映（decodeFull 一本化・pixelEqual 導出・
-  comparable 別名廃止・decodeOne 戻り型で二重ガード解消ほか）。型/lint/整形・build 緑。
-  ※ **worker/DOM 結線は agent-browser 不可のため `vp dev` で手動確認要**（メトリクス値・3 表示切替・差分描画）。
-- **Phase 4a 後の UX 改修 完了（commit 済）**: 段階進捗（compare）・スライダ handle 化→react-compare-slider・
-  `#` 廃止(react-router)・タブ切替の状態保持(zustand)・「査重」→日本語・選択ボタン hover 修正(secondary→primary)・
-  wasm init を `{module_or_path}` 化（deprecated 警告解消）・perceptual しきい値を shadcn Slider に。全て本番反映済。
-- **Phase 4b 完了（commit `5d3460d`・本番デプロイ済 version `894e5f89`）**: install ページを実ページ化。
-  `components/CopyBlock.tsx`（新規・コピー可能コードブロック）+ `screens/InstallScreen.tsx`（OS タブ Windows/macOS/Linux・
-  `detectOS` で既定自動判定）。Windows=`irm https://imgdiff.wgzhao.me/install.ps1 | iex`（+ cmd 変体・手動 zip は
-  `releases/latest`）、macOS/Linux=`cargo install --git https://github.com/wgzhaocv/img-diff imgdiff`（要 libvips+libheif・
-  プレビルドは近日・ユーザー決定でソースビルド案内）、AI 手順書=`npx skills add github:wgzhaocv/img-diff`。中国語「手册」是正。
-  **agent-browser で E2E 検証済**（OS タブ自動判定・コマンドが install.ps1 と一致・コピー→toast・明/暗）。
-  simplify=4エージェント + **codex review**（gpt-5.5）反映（`cargo install` 化・per-button aria-label・長コマンドの透け防止）。
-  ※ **Mac/Linux バイナリは未リリース**。install の Windows one-liner は GitHub Releases に実体（`latest`）が要る（未作成なら失敗）→ §1 の release 作成が次。
-- 設計は `apps/website/DESIGN.md`、ロジック正本は `packages/schema/SPEC.md`。
+### まだ塞げていない穴
 
-### 2.5 画像形式の変換（SPEC §5.4 / web `/convert`）— **完了**（2026-09-19/20）
-
-利用者依頼の 1 件目。参照実装 `~/Desktop/projects/image_transform` の引数語義を 1:1 で複刻した。
-**正本は SPEC §5.4**（7 引数・4 規則・gravity 9 方向の算術・形式表・web/CLI の差）。
-
-- `lib/convertPlan.ts` = 純粋な算術（vips にも DOM にも依存しない）、`workers/vips.ts::applyConvert` =
-  画素操作、`lib/convert.ts` = 編排、`convertSinks.ts` = 出力先（フォルダ / zip）。
-- 出力は**別に選んだフォルダ**か **zip**。入力フォルダには書かないので、元データに対して
-  削除と同格の readwrite 昇格を求めない。フォルダ書き出しは既定 skip・明示で上書き。
-- **JXL を web に積んだ**（`vite.config.ts` の files と `workers/vips.ts` の dynamicLibraries の**両方**）。
-- **CLI の `imgdiff convert` は未実装。** SPEC §5.4 だけ見れば実装できる粒度で算術を書いてある。
-
-**参照実装と食い違う点（実装しないと出ない。CLI を書くときも同じ罠）:**
-
-- **contain は常に目標寸法を返す**（拡大しない縛りで縮小が起きなくても背景で埋める）。
-  **cover は逆に、元が両辺とも目標以下ならそのまま返す。**
-- **`embed` の背景ベクタは画像の bands と本数を合わせる**（合わないと libvips が例外）。
-  グレースケール(1band) / グレー+アルファ(2band) を落とすとその画像で必ず落ちる。
-- **`writeToBuffer` の接尾辞に下線キーを書くと黙って無視される**（`[Q=80,optimize_coding=true]`）。
-  オプションは第 2 引数のオブジェクトで渡す。
-- **`autorot` は意図的に参照実装から外した**（参照側は EXIF 未対応で JPEG→PNG が倒れる）。SPEC に明記。
-
-**繰延べ（実利が出てから）:**
-
-- 幾何算術を `crates/core` へ寄せて CLI と wasm で共有する案。今は SPEC §5.4 に算術を
-  書き下すことで drift を防いでいる（`planDeletions` と同型の判断・§3(A)③ 参照）。
-- zip 出力は全件をメモリに抱えてから 1 つの Blob にする。大量ならフォルダ書き出しを使う想定。
-
-### 3. Phase 3b 残り（← (A) 実削除 完了・commit 済。次は (B) or (C)）
-
-**(A) 実削除 完了（commit `362db82`・本番デプロイ済 version `7db507e2`・ユーザー指示で vp dev 検証を省き直接 deploy）**
-
-CLI `crates/cli/src/clean.rs`（SPEC §5.1）の安全モデルを踏襲。**破壊的・恒久（web にゴミ箱なし＝removeEntry は復元不可）**。
-対象は `autoDeletable=true`（exact/pixel）グループの keeper 以外のみ。perceptual は絶対に削除しない・keeper は必ず残す。
-
-- **実装**（すべて `apps/website/src/`）:
-  - `lib/clean.ts`（新規）: `planDeletions(groups, images)`（純関数・CLI `clean.rs::plan_deletions` と規則一致＝autoDeletable のみ・
-    keeper 除外・`PlannedDeletion` は共有契約 `schema` を再利用）+ `applyDeletions(root, rootId, planned)`（1 件ずつ
-    **恒久削除** removeEntry → 成功時のみキャッシュ掃除 → per-file 記録・1 件失敗で止めない）。
-  - `lib/fsaccess.ts`: `removeByPath(root, path)`（`/` 分解 → 末尾以外 `getDirectoryHandle` → 親で `removeEntry`。`''`/`'.'`/`'..'`
-    セグメントは throw＝防御的。FS Access は構造的に root 配下しか辿れずサンドボックスが封じ込めを強制）+ `requestWritePermission`
-    （**削除の click 内**で `requestPermission({mode:"readwrite"})`＝transient activation 保持。scan は read のみ・段階要求 DESIGN §6.3）。
-  - `lib/db.ts`: `deleteHash`（正本＝throw 可）/ `deleteThumb`（best-effort＝内部 swallow。put\* と対の設計）。
-  - `lib/stores/scanStore.ts`: `rootHandle` 保持（File[] 経路は null）+ `deleteDuplicates`（権限 → applyDeletions →
-    **削除中に新スキャンで result が差し替わっていたら書き戻さない世代ガード**（`get().result === result`・clusterToken と同型）→
-    store/IDB reconcile → 再クラスタ → toast）。二重起動は `deleting` ガード。
-  - `components/ui/alert-dialog.tsx`（新規・shadcn/radix unified import）+ `components/DeleteDuplicatesButton.tsx`（新規）:
-    「N 件を削除（M 回収）」ボタン → **強確認 AlertDialog**（「元に戻せません・ゴミ箱なし・恒久」をアイコン+テキストで明示＝
-    色依存でない・件数/回収バイト/対象一覧最大100件の dry-run プレビュー）。**File[] 経路は永続 handle が無く削除不可 →
-    ボタン無効化 + 理由表示**。busy 中はクローズ抑止・`e.preventDefault()` で非同期完了までダイアログを保持。
-- **検証済**: `vp check`（型/lint/整形）+ `vp build` 緑。**agent-browser で File[] 経路を実機確認**（重複7枚→autoDeletable 2 群・
-  削除ボタン「3 件を削除」が disabled + 理由文言・keeper リング表示）。※ **FS Access 経路（有効ボタン→AlertDialog→実削除）は
-  ネイティブのフォルダ選択が要るため agent-browser 不可 → ユーザーが `vp dev` で使い捨てフォルダ検証後にデプロイ**。
-- **レビュー**: simplify=4 エージェント並列（reuse/simplification/efficiency/altitude）実施・反映済み（PlannedDeletion を schema 再利用・
-  死条件削除・reconcile 世代ガード）。安全不変条件（keeper/perceptual 保護・transient activation・per-file 安全・reconcile 順序）は
-  altitude レビューで確認済み・ブロッカーなし。codex は導入済みだが未ログイン（回すなら `!codex login`）。
-- **繰延べた最適化（実利小・破壊的パスは簡潔=安全優先。将来必要なら）**: ① `removeByPath` の親ディレクトリ再解決（ネスト深い
-  フォルダで大量削除時 O(D×深さ)。親ごとに handle を 1 回解決してグルーピング）② IDB 掃除を削除ループ後に 1〜2 txn でバッチ化。
-  ③ `planDeletions` を crates/core へ寄せ wasm 共有（clusterGroup と同型・CLI/TS の規則 drift 防止）。
-
-**(B) 前回フォルダ再スキャン 完了（commit `af529e9`・本番デプロイ済 version `bfd3bbca`）**
-
-ユーザー決定で **jobs は不使用**（完了/中断を区別せず、同じフォルダを再スキャンすれば hashes キャッシュで残りだけ埋まる）。
-
-- `ScanScreen` が mount 時 `getRoots()` で保存済みフォルダを読み、idle 画面に「前回のフォルダ」チップを提示。
-- クリック（ユーザー操作）内で `fsaccess.requestReadPermission`（`requestPermission({mode:"read"})`・reload 後の prompt 状態から昇格）
-  → granted なら既存 `runFolder(handle)`（`scanFolder`→`resolveRoot` の isSameEntry で同一 rootId 再利用・キャッシュ突合で高速）。
-  拒否/失効ハンドルは toast で通知（handleSavedRoot は try/catch 済）。File[] 経路は永続ハンドル無しなので非表示。DESIGN §5/§6.3。
-- **未実装のまま繰延べ**: `jobs` ストア（db.ts に型・スキーマだけ定義済・未使用）を使った「前回 N/M で中断、続行?」の明示提示。
-  現状は「同じフォルダをもう一度スキャン」で残りだけ埋まる方式で代替。
-
-**(C) 低リスクの小物**
-
-- **(C-1) キャッシュ GC/reconcile 完了（commit `af529e9`）**: `scanFolder` が列挙に無くなった path の hashes/thumbs を
-  `db.gcOrphans`（1 txn バッチ）で掃除。**空列挙ガード**（`files.length>0`）で権限喪失時の全消去を防止。present 判定は
-  「列挙に在ったか(`files`)」基準（getFile 失敗の既存ファイルを誤 GC しない）。実削除後の reconcile（`clean.ts::applyDeletions`）も
-  `gcOrphans` に統合し `deleteHash`/`deleteThumb` を廃止（掃除経路を 1 本化＝TODO §3(A)② のバッチ化も達成）。
-- **(C-2) pixelSha256 byte golden 完了（commit `af529e9`）**: `sha256_hex` を `crates/core/src/hash.rs` に集約
-  （CLI `util::sha256_hex` は core へ委譲・`sha2` を core 1 箇所へ＝unused dep 解消。TODO §3(A)③ の drift 防止も達成）。
-  `crates/wasm` の `parity_vectors` に「白平坦化後 RGBA の SHA-256」行を追加し GOLDEN で native==wasm を固定
-  （`cargo test -p imgdiff-wasm` + `wasm-pack test --node` 双方緑・要 mingw on PATH）。
-- **(C-3) グループ仮想化（繰延べ）**: 数千グループ時。`@tanstack/react-virtual`（未導入・可変高）。実利が出てから。
-- **(C-4) shrink-on-load（DESIGN §7.1・繰延べ）**: 1 パス目を縮小デコードで高速化。差し替え点は `workers/vips.ts::decodeCanonical`
-  の `newFromBuffer` 第2引数（1 パス目のみ・2 パス目/compare は全分解能必須）。導入時 **dHash+sha parity(golden) を必ず再実行**。「先に計測」方針。
-
-## ビルド/実行メモ（windows-gnu）
-
-```sh
-export PKG_CONFIG_PATH="C:\msys64\mingw64\lib\pkgconfig"   # pkg-config が vips を見つける
-export PATH="C:\msys64\mingw64\bin:$PATH"                  # 実行時の vips DLL + as/dlltool(binutils)
-cargo build --release -p imgdiff                           # 計測は必ず --release（debug は 6.7x 遅い）
-```
-
-- 実テスト画像: `C:\Users\wenguangzhao\Downloads\png`。
-- libvips の Rust バインディングは windows-gnu で不可 → 自前 FFI。`mingw-w64-x86_64-binutils` が必須。
-- 仕上げは simplify agent → codex rescue agent でレビュー（skill でなく agent）。
+- **SPEC §1 が要求する固定画像の golden 夹具**は HEIC のぶんだけ（`tests/fixtures/sample.heic` +
+  `scripts/check-heic-parity.sh`）。jpg / png 等は手動確認のまま。
+- `SCANNABLE_EXTS` と CLI 既定 `--ext` が **`tif` と `svg` でずれている**（web だけが拾う）。
+- Windows のクロスビルド（OrbStack 経路）。材料は確認済み:
+  `vips-dev-x64-all-8.18.6.zip`（mac と同じ 8.18.6）+ mingw-w64 + `x86_64-pc-windows-gnu`。
+  検証は Wine（Rosetta で amd64 コンテナ）。これが済むと v0.1.6 を latest へ昇格でき、
+  `imgdiff update` の自己更新が実際に使えるようになる。

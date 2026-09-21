@@ -190,6 +190,63 @@ IndexedDB・権限の扱い）を定める。**キャッシュやストレージ
 実測 4000×3000 で 165ms / 45.8MB。`thumbnailBuffer` の shrink-on-load なら 53ms・その確保なし
 （出力 webp は同一）。**表示する分（12 件）しか作らない**。
 
+### 7.3 補助デコーダ（HEVC の HEIC）
+
+wasm-vips 0.0.18 の libheif は **HEVC を持たない**（AVIF は読める）ので、
+HEIC だけ `libheif-js`（libde265 入り）で RGBA へ解いてから wasm-vips に渡す
+（`workers/heic.ts`）。SPEC §1「デコーダは両端で別物である」の具体がこれ。
+
+- **HEIC が実際に来るまで取りに行かない。** グルー（91KB）は bundle、wasm（1.4MB）は
+  `public/libheif/` から。転送は gzip 0.48MB。実測: HEIC を含まない選択では取得 0 件。
+- 復号は 300×500 で 13ms。
+- **原生 libvips との差（実測）**: 画素は 29.9% のバイトが異なり最大差 11、SSIM 0.99753。
+  **dHash は一致**（hamming 0）—— 9×8 への縮小で補間差がならされる。
+  `scripts/check-heic-parity.sh` がこれを検査する。
+- **decoder は使い回し、`free()` を必ず呼ぶ。** libheif-js は「同じ decoder の次の decode()」で
+  しか前回の context を解放しない。実測: 4.5KB の夹具 ×3000 回で 16.3 → 48.6MB、
+  使い回し + `free()` で 0。wasm のヒープは縮まない。
+- `applyConvert` / `applyInfo` を**同期のまま**保つため、入力は `DecodeSource`
+  （`encoded` か `rgba`）で受ける。非同期なのは入口（`toSource`）だけ。
+- **向きの適用は libheif が済ませている**ので、RGBA 経路で `autorot` を重ねない（SPEC §1 手順 2）。
+- **RGBA は vips へ往復させない**。libheif が返す物と `newFromMemory → writeToMemory` の
+  結果は sha256 が一致するので、12MP で約 146MB ぶん無駄になる。
+- 読めても**書けるようにはならない**。何を書けるかは `saveSpec` が唯一の正本（書けない形式には
+  `null` を返す）で、画面の選択肢も検証もそこから導く。
+
+### 7.4 大きい画像と保存器の制約（実測）
+
+**libvips は流式に処理する**が、**保存器が全画素をメモリに要求する形式がある**。
+6000×8000（48MP）の実測:
+
+| 出力 | 既定(random)                                 | `access=sequential`    |
+| ---- | -------------------------------------------- | ---------------------- |
+| jpg  | OK 21.0MB / 1020ms                           | OK 21.0MB / **723ms**  |
+| png  | OK 91.4MB / 2041ms                           | OK 91.4MB / **1757ms** |
+| webp | **FAIL**（`out of memory -- size == 137MB`） | **FAIL**               |
+
+jpg / png は逐行で書けるので通る。webp が落ちるのは **libwebp の API が `WebPPicture` に
+全画素を要求する**ため（avif / gif / jxl も同類）。1920 へ縮小してからなら webp は通る
+（1.2MB / 1008ms）。
+
+対応:
+
+- 読み込みは **`access=sequential`**（上の実測ぶん速い）。ただし `bg=average` は
+  「統計 → 合成」で二度読みするので、その組み合わせだけ既定で読む。
+- 予測できる失敗は**押す前に**止める（`tooLargeForFormat`。境は実測から 16MP）。
+  wasm の例外は読めないし、大きい画像では数秒待たせてから落ちる。
+
+### 7.5 プール本数の実測（§4 の既定の根拠）
+
+24 枚（2000×1500）を 800×600 へ変換したときの `stats.elapsedMs`:
+
+| pool | 1     | 2     | 4     | 8         |
+| ---- | ----- | ----- | ----- | --------- |
+| 実測 | 713ms | 406ms | 244ms | **164ms** |
+
+**外層の並列は効いている**（8 本で 4.35 倍）。本数を減らす理由は速度には無い。
+一方でメモリは実体ごとに積み上がるので、**画面を離れたら畳む**（`releaseIdlePools`。
+走行中のプールは畳まない）。計測用に `?pool=N` で上書きできる。
+
 ## 8. 未決事項（要・合意）
 
 - ~~pixelSha256 の遅延計算~~ **【解決済み】** SPEC §2.1 で「dHash が他と一致する候補のみ算出」に確定。

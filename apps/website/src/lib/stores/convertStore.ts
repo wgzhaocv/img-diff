@@ -21,7 +21,13 @@ import {
   type ConvertSink,
   type ConvertSource,
 } from "@/lib/convert";
-import { FIT_VALUES, GRAVITY_VALUES, mimeOf, WRITABLE_FORMATS } from "@/lib/convertControls";
+import {
+  FIT_VALUES,
+  GRAVITY_VALUES,
+  mimeOf,
+  cannotWriteReason,
+  WRITABLE_FORMATS,
+} from "@/lib/convertControls";
 import type { ConvertResult, InfoResult } from "@/lib/hashTypes";
 import {
   clampQuality,
@@ -30,9 +36,11 @@ import {
   normalizeOutFormat,
   parseDim,
   parseHexRgb,
+  planGeometry,
 } from "@/lib/convertPlan";
 import { defaultPoolSize, PoolAbortError, poolRef } from "@/lib/workerPool";
 import { errText } from "@/lib/format";
+import { rafThrottle } from "@/lib/rafThrottle";
 import { extOf } from "@/lib/imagePaths";
 
 // convert 画面の状態ストア（zustand）。scanStore と同じ作法:
@@ -42,26 +50,6 @@ const POOL_SIZE = defaultPoolSize();
 // scan とは**別の持ち手**にする（共有すると convert の中断が走行中の scan を巻き込む）。
 const pool = poolRef(POOL_SIZE);
 let running = false; // 二重起動防止（描画に無関係なのでストア外）。
-
-/**
- * 進捗の set をフレームに 1 回へ合流させる。
- *
- * `onProgress` は 1 件終わるごとに呼ばれ、各 worker の postMessage コールバック＝別マクロタスク
- * なので React は跨いでバッチしない。実測で小さい画像だと ~580 回/秒に達し、そのたびに
- * 画面全体が再描画される。進捗バーはフレームに 1 回で足りる。
- */
-function rafThrottle<T>(apply: (v: T) => void): (v: T) => void {
-  let latest: T | null = null;
-  let scheduled = 0;
-  return (v: T) => {
-    latest = v;
-    if (scheduled) return;
-    scheduled = requestAnimationFrame(() => {
-      scheduled = 0;
-      if (latest !== null) apply(latest);
-    });
-  };
-}
 
 type Status = "idle" | "converting" | "done";
 
@@ -290,6 +278,45 @@ export type ConvertState = {
 };
 
 /**
+ * その 1 枚が**この設定では書き出せない**なら理由を返す。
+ * `validate` とプレビューが**同じ答え**を出すために、原寸の有無の扱いまでここに閉じる。
+ */
+function writeBlockFor(state: ConvertState, options: ConvertOptions, path: string): string | null {
+  const info = state.sourceInfo.get(path);
+  return cannotWriteReason(
+    options,
+    extOf(path),
+    info && info.width > 0 ? plannedOutput(options, info) : undefined,
+  );
+}
+
+/** この設定でその画像がどうなるか（計画から。画素には触らない）。 */
+function plannedOutput(
+  options: ConvertOptions,
+  src: { width: number; height: number },
+): { noop: boolean; width: number; height: number } {
+  const plan = planGeometry({
+    srcW: src.width,
+    srcH: src.height,
+    width: options.width,
+    height: options.height,
+    fit: options.fit,
+    gravity: options.gravity,
+  });
+  const noop = plan.kind === "noop";
+  switch (plan.kind) {
+    case "noop":
+      return { noop, ...src };
+    case "cover":
+      return { noop, width: plan.crop.width, height: plan.crop.height };
+    case "contain":
+      return { noop, width: plan.embed.width, height: plan.embed.height };
+    default:
+      return { noop, width: plan.width, height: plan.height };
+  }
+}
+
+/**
  * プレビューと原寸の基準にする 1 枚（サムネで選べる。未選択なら先頭）。
  * **3 つの画面部品が同じ 1 枚を指す**必要があるので、選び方はここに 1 つだけ置く。
  */
@@ -305,7 +332,13 @@ export const representativePath = (s: ConvertState): string | undefined =>
 export function previewKey(s: ConvertState): string {
   const path = representativePath(s) ?? "";
   const resolved = resolveOptions(s.form);
-  return "error" in resolved ? `invalid:${path}` : `${path}\n${JSON.stringify(resolved.options)}`;
+  // **原寸も含める。** 大きすぎるかどうかの判定は原寸に依るので、サムネが届いた時点で
+  // 作り直さないと「ボタンの下は理由を出しているのに、絵の側は実際に走って落ちる」になる。
+  const info = path === "" ? undefined : s.sourceInfo.get(path);
+  const dims = info ? `${info.width}x${info.height}` : "?";
+  return "error" in resolved
+    ? `invalid:${path}`
+    : `${path}\n${dims}\n${JSON.stringify(resolved.options)}`;
 }
 
 /** フォームの生値を解決済みの `ConvertOptions` にする。`null` は入力エラー（理由つき）。 */
@@ -396,6 +429,14 @@ function prefillDimensions(
   set({ form: { ...form, width: String(info.width), height: String(info.height) } });
 }
 
+/**
+ * 進捗の set をフレームに 1 回へ合流させる持ち手。**実行ごとに作らない** ——
+ * 作り直すと前回の予約フレームを取り消せず、新しい実行の「0 / N」を古い値で上書きし得る。
+ */
+const onProgress = rafThrottle<ConvertProgress>((progress) =>
+  useConvertStore.setState({ progress }),
+);
+
 export const useConvertStore = create<ConvertState>()(
   persist(
     (set, get) => ({
@@ -482,12 +523,20 @@ export const useConvertStore = create<ConvertState>()(
         // 入力が不正なときは黙って前の絵を残す（理由は実行ボタンの下に出ている）。
         if ("error" in resolved) return;
 
+        const srcFormat = extOf(src.path);
+        // 書けない・大きすぎるなら試さずに理由を出す（実行ボタンの下と同じ文言を絵の側でも）。
+        const reason = writeBlockFor(state, resolved.options, src.path);
+        if (reason) {
+          set({ previewRendering: false, previewError: reason });
+          return;
+        }
+
         const gen = sourcesGen;
         const key = previewKey(state);
         previewBusy = true;
+        const releaseHold = pool.hold();
         set({ previewRendering: true, previewError: null });
         try {
-          const srcFormat = extOf(src.path);
           // **本番と同じ入口を通す**（素通し判定も含めて）。別に書くと「プレビューだけ違う」が生まれる。
           const out = await convertSource(src, resolved.options, pool.get());
           if (gen !== sourcesGen) return; // 選び直された後に返ってきた結果は捨てる
@@ -512,6 +561,7 @@ export const useConvertStore = create<ConvertState>()(
           if (e instanceof PoolAbortError) return;
           set({ previewError: errText(e) });
         } finally {
+          releaseHold();
           previewBusy = false;
           set({ previewRendering: false });
           if (previewQueued) {
@@ -536,6 +586,7 @@ export const useConvertStore = create<ConvertState>()(
         }
         set({ infoLimit: limit });
         for (const s of want) infoInflight.add(s.path);
+        const releaseHold = pool.hold();
 
         // 同時に読む数を絞る。並列度ではなく**メモリ**が目的（1 件ごとにファイル全体を読む）。
         // **ワーカーを 1 本空けておく**: 全部埋めると、利用者が見ているプレビューが
@@ -563,6 +614,7 @@ export const useConvertStore = create<ConvertState>()(
             infoInflight.delete(src.path);
           }
         });
+        releaseHold();
       },
 
       cancel: () => {
@@ -583,6 +635,10 @@ export const useConvertStore = create<ConvertState>()(
         ) {
           return "変換する指定がありません（寸法・出力形式・画質のどれかを指定してください）。";
         }
+        // **書けない / 大きすぎる**を実行前に止めるのは、**全件が駄目なとき**だけ。
+        // 1 枚の heic を巻き添えに 999 枚を止めない（昔どおり per-file の失敗として記録する）。
+        const reasons = sources.map((src) => writeBlockFor(get(), resolved.options, src.path));
+        if (reasons.length > 0 && reasons.every((r) => r != null)) return reasons[0];
         return null;
       },
 
@@ -604,6 +660,8 @@ export const useConvertStore = create<ConvertState>()(
         if (sources.length === 0) return;
 
         running = true;
+        const releaseHold = pool.hold(); // 走行中は畳ませない（画面を離れても最後まで走る）
+        onProgress.cancel(); // 前回の予約フレームが新しい実行の 0/N を上書きしないように
         set({
           status: "converting",
           items: [],
@@ -618,7 +676,7 @@ export const useConvertStore = create<ConvertState>()(
             sink,
             pool.get(),
             POOL_SIZE,
-            rafThrottle<ConvertProgress>((progress) => set({ progress })),
+            onProgress,
           );
           set({
             items,
@@ -659,6 +717,7 @@ export const useConvertStore = create<ConvertState>()(
           }
         } finally {
           running = false;
+          releaseHold();
           // 変換中は見送っていたプレビューと、中断で落ちたサムネをここで拾い直す。
           void get().loadSourceInfo(get().infoLimit);
           if (previewQueued) {

@@ -29,13 +29,8 @@ export function ConvertDestination() {
       </Tabs>
       {destination === "folder" ? (
         <div className="space-y-2">
-          <p className="text-sm text-muted-foreground">
-            実行すると保存先フォルダを聞きます。元のフォルダ構造を保って書き出し、
-            <strong className="font-medium text-foreground">
-              同名のファイルが既にあれば飛ばします
-            </strong>
-            。
-          </p>
+          {/* 押すとダイアログが出る理由だけ先に言う。構造を保つことは結果で分かる。 */}
+          <p className="text-sm text-muted-foreground">実行時に保存先を聞きます。</p>
           <label className="flex w-fit items-center gap-2 text-sm">
             <input
               type="checkbox"
@@ -43,14 +38,11 @@ export function ConvertDestination() {
               checked={overwrite}
               onChange={(e) => setForm({ overwrite: e.target.checked })}
             />
-            既にあるファイルを上書きする
+            同名を上書きする
           </label>
         </div>
       ) : (
-        <p className="text-sm text-muted-foreground">
-          全件を 1 つの zip
-          にまとめてダウンロードします。枚数が多いときはフォルダ保存の方が軽いです。
-        </p>
+        <p className="text-sm text-muted-foreground">1 つの zip にまとめます。</p>
       )}
     </fieldset>
   );

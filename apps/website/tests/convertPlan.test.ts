@@ -20,6 +20,7 @@ import {
   rememberedForm,
   resolveOptions,
   sanitizeStoredForm,
+  useConvertStore,
 } from "@/lib/stores/convertStore";
 
 const base = { srcW: 100, srcH: 50, fit: "cover", gravity: "center" } as const;
@@ -222,23 +223,31 @@ describe("形式名と品質", () => {
   });
 
   it("Q を受け付けない形式には渡さない（渡すと libvips が失敗する）", () => {
-    expect(saveSpec("jpg", 80).options).toMatchObject({ Q: 80 });
-    expect(saveSpec("jpeg", 80).suffix).toBe(".jpg");
-    expect(saveSpec("avif", 200).options).toMatchObject({ Q: 100, compression: "av1" });
-    expect(saveSpec("gif", 80).options).not.toHaveProperty("Q");
-    expect(saveSpec("png", 80).options).not.toHaveProperty("Q");
-    expect(saveSpec("ppm", 80).options).toEqual({});
+    expect(saveSpec("jpg", 80)!.options).toMatchObject({ Q: 80 });
+    expect(saveSpec("jpeg", 80)!.suffix).toBe(".jpg");
+    expect(saveSpec("avif", 200)!.options).toMatchObject({ Q: 100, compression: "av1" });
+    expect(saveSpec("gif", 80)!.options).not.toHaveProperty("Q");
+    expect(saveSpec("png", 80)!.options).not.toHaveProperty("Q");
+    expect(saveSpec("ppm", 80)!.options).toEqual({});
   });
 
   it("TIFF だけ保存前に sRGB へ寄せる", () => {
-    expect(saveSpec("tiff", 80).needsSrgb).toBe(true);
+    expect(saveSpec("tiff", 80)!.needsSrgb).toBe(true);
     for (const f of ["jpg", "png", "webp", "gif", "avif", "jxl"])
-      expect(saveSpec(f, 80).needsSrgb, f).toBe(false);
+      expect(saveSpec(f, 80)!.needsSrgb, f).toBe(false);
+  });
+
+  it("**書けない形式には null を返す**（ここが「何を書けるか」の正本）", () => {
+    // 以前は `.heic` / `.svg` の保存指定を作って返していたので、選択肢にも検証にも
+    // 「書ける」ことになり、失敗が wasm の例外としてしか現れなかった。
+    for (const f of ["heic", "heif", "svg", "bmp", "pdf", "なにこれ"]) {
+      expect(saveSpec(f, 80), f).toBeNull();
+    }
   });
 
   it("JPEG の色度間引きを止める設定を落とさない", () => {
     // subsample_mode を落とすと見て分かる画質差が出る（参照実装が明示している）。
-    expect(saveSpec("jpg", 80).options).toMatchObject({
+    expect(saveSpec("jpg", 80)!.options).toMatchObject({
       optimize_coding: true,
       subsample_mode: "off",
     });
@@ -496,5 +505,29 @@ describe("次に開いたときも残す設定", () => {
     expect(sanitizeStoredForm({ format: "" }).format).toBe("");
     expect(sanitizeStoredForm({ format: "webp" }).format).toBe("webp");
     expect(sanitizeStoredForm({ format: "svg" }).format).toBeUndefined();
+  });
+});
+
+describe("読めるが書けない形式は実行前に止める", () => {
+  const form = { ...DEFAULT_FORM, width: "100", height: "100" };
+  const src = (path: string) => ({ path, bytes: () => Promise.resolve(new ArrayBuffer(0)) });
+
+  it("heic を変換しようとして出力形式が未指定なら理由を返す", () => {
+    useConvertStore.getState().setSources([src("a.heic")]);
+    useConvertStore.getState().setForm(form);
+    expect(useConvertStore.getState().validate()).toMatch(/書き出せません/);
+  });
+
+  it("出力形式を指定すれば通る", () => {
+    useConvertStore.getState().setSources([src("a.heic")]);
+    useConvertStore.getState().setForm({ ...form, format: "jpg" });
+    expect(useConvertStore.getState().validate()).toBeNull();
+  });
+
+  it("素通しになる分は止めない（元のバイト列をそのまま出すだけなので）", () => {
+    useConvertStore.getState().setSources([src("a.heic")]);
+    // 寸法も形式も指定しない＝何も変えない ⇒ 素通し。ただし「やることが無い」は別の理由で止まる。
+    useConvertStore.getState().setForm({ ...DEFAULT_FORM, width: "", height: "" });
+    expect(useConvertStore.getState().validate()).toMatch(/変換する指定がありません/);
   });
 });

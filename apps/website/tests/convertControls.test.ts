@@ -132,7 +132,7 @@ describe("画質（quality）", () => {
 describe("qualityApplies は saveSpec を唯一の正本にしている", () => {
   it("書ける形式すべてで saveSpec の Q の有無と一致する", () => {
     for (const f of WRITABLE_FORMATS) {
-      expect(qualityApplies(f), f).toBe("Q" in saveSpec(f, 80).options);
+      expect(qualityApplies(f), f).toBe("Q" in saveSpec(f, 80)!.options);
     }
   });
 });

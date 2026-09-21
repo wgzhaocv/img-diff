@@ -12,7 +12,6 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
 import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DropZone } from "@/components/DropZone";
@@ -22,13 +21,7 @@ import { STRICTNESS_LABEL, STRICTNESS_ORDER, type Strictness } from "@/lib/core"
 import { getRoots, type RootEntry } from "@/lib/db";
 import { pickDirectory, requestReadPermission, supportsFileSystemAccess } from "@/lib/fsaccess";
 import { useScanStore } from "@/lib/stores/scanStore";
-import type { ScanProgress } from "@/lib/scan";
-
-const PHASE_LABEL: Record<ScanProgress["phase"], string> = {
-  enumerating: "ファイルを列挙中…",
-  hash: "デコード + ハッシュ中…",
-  pixel: "ピクセル照合中…",
-};
+import { ScanProgressBar } from "@/components/ScanProgress";
 
 const FEATURES = [
   {
@@ -51,7 +44,6 @@ const FEATURES = [
 export function ScanScreen() {
   const {
     status,
-    progress,
     result,
     elapsedMs,
     strictness,
@@ -122,7 +114,6 @@ export function ScanScreen() {
   }
 
   const scanning = status === "scanning";
-  const pct = progress.total > 0 ? Math.round((progress.processed / progress.total) * 100) : 0;
 
   return (
     <div className="mx-auto max-w-4xl space-y-8">
@@ -178,17 +169,7 @@ export function ScanScreen() {
         </div>
       ) : null}
 
-      {scanning ? (
-        <div className="mx-auto max-w-2xl space-y-2" role="status" aria-live="polite">
-          <div className="flex items-center justify-between text-sm text-muted-foreground">
-            <span>{PHASE_LABEL[progress.phase]}</span>
-            <span className="num">
-              {progress.processed} / {progress.total}
-            </span>
-          </div>
-          <Progress value={pct} />
-        </div>
-      ) : null}
+      <ScanProgressBar />
 
       {status === "done" && result ? (
         <div className="space-y-6">

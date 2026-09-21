@@ -6,6 +6,7 @@ import { applyDeletions, planDeletions, type CleanResult } from "@/lib/clean";
 import { requestWritePermission } from "@/lib/fsaccess";
 import { formatBytes, errText } from "@/lib/format";
 import { defaultPoolSize, poolRef } from "@/lib/workerPool";
+import { rafThrottle } from "@/lib/rafThrottle";
 
 // scan 画面の状態ストア（zustand）。コンポーネント外に持つのでルート切替でアンマウントされても
 // スキャン結果・厳密度・グループ・進捗が保持される。ワーカープールもここで使い回す。
@@ -64,6 +65,8 @@ export const useScanStore = create<ScanState>((set, get) => {
   async function runIndex(doScan: () => Promise<ScanResult>): Promise<void> {
     if (running) return;
     running = true;
+    const releaseHold = pool.hold(); // 走行中は畳ませない（画面を離れても最後まで走る）
+    onProgress.cancel(); // 前回の予約フレームが新しい実行の 0/N を上書きしないように
     set({
       status: "scanning",
       result: null,
@@ -89,10 +92,14 @@ export const useScanStore = create<ScanState>((set, get) => {
       set({ status: "idle" });
     } finally {
       running = false;
+      releaseHold();
     }
   }
 
-  const onProgress = (progress: ScanProgress) => set({ progress });
+  // **フレームに 1 回へ合流させる。** worker の完了ごとに呼ばれるので、小さい画像だと
+  // 秒間数百回に達する（convert 側の実測で最大 ~580 回/秒）。そのたびに set すると
+  // 画面がまるごと描き直される。進捗バーはフレームに 1 回で足りる。
+  const onProgress = rafThrottle<ScanProgress>((progress) => set({ progress }));
 
   // 重複の実削除（SPEC §5.1・破壊的・恒久）。権限要求 → applyDeletions → store/IDB reconcile → 再クラスタ。
   // FS Access 経路（rootHandle あり）でのみ動く。呼び出し（AlertDialog の確認 click）内で権限を昇格する。

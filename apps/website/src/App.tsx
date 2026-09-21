@@ -1,10 +1,12 @@
 import { Moon, Sun } from "lucide-react";
-import { NavLink, Navigate, Route, Routes } from "react-router";
+import { useEffect } from "react";
+import { NavLink, Navigate, Route, Routes, useLocation } from "react-router";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
 import { Logo } from "@/components/Logo";
 import { ModeTabs } from "@/components/ModeTabs";
 import { useTheme } from "@/lib/theme";
+import { releaseIdlePools } from "@/lib/workerPool";
 import { ScanScreen } from "@/screens/ScanScreen";
 import { ConvertScreen } from "@/screens/ConvertScreen";
 import { CompareScreen } from "@/screens/CompareScreen";
@@ -56,6 +58,8 @@ export function App() {
         </div>
       </header>
 
+      <ReleaseIdlePoolsOnRouteChange />
+
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-10 sm:px-6">
         <Routes>
           <Route path="/scan" element={<ScanScreen />} />
@@ -85,4 +89,20 @@ export function App() {
       <Toaster />
     </div>
   );
+}
+
+/**
+ * 画面を切り替えたら、**使っていない wasm-vips のワーカーを畳む**。
+ *
+ * 機能ごとにプールの持ち手が在るので（scan / compare / convert）、3 つとも触ると
+ * 実体が 3×N 個そのまま残る。1 実体あたり 1GiB の線形メモリを予約し、wasm のヒープは
+ * 縮まないので、放っておくと戻らない。**走行中のプールは畳まない**ので、
+ * 変換中に別の画面を見に行っても最後まで走る。
+ */
+function ReleaseIdlePoolsOnRouteChange() {
+  const { pathname } = useLocation();
+  useEffect(() => {
+    releaseIdlePools();
+  }, [pathname]);
+  return null;
 }

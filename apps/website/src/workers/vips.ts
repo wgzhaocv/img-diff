@@ -3,6 +3,7 @@
 // 白平坦化・dHash（手順 4〜8）はしない。呼び出し側が core（imgdiff-wasm）で行う。
 
 import type { ConvertOptions } from "schema";
+import { decodeHeicToRgba, isAv1Heif, needsHeicDecoder } from "./heic";
 import {
   BG_AVERAGE,
   BG_TRANSPARENT,
@@ -53,6 +54,14 @@ type VipsImage = {
 export type Vips = {
   Image: {
     newFromBuffer(data: Uint8Array, strOptions?: string): VipsImage;
+    /** 既に画素になっている入力から作る（補助デコーダを通した HEIC）。 */
+    newFromMemory(
+      data: Uint8Array,
+      width: number,
+      height: number,
+      bands: number,
+      format: string,
+    ): VipsImage;
     /** **shrink-on-load** つきの縮小読み込み（jpeg なら間引いて読む）。サムネ専用。 */
     thumbnailBuffer(
       data: Uint8Array,
@@ -97,6 +106,48 @@ export function getVips(): Promise<Vips> {
   return vipsPromise;
 }
 
+/**
+ * 変換・解析の入力。**バイト列とは限らない** —— HEIC は wasm-vips が読めないので、
+ * 補助デコーダ（`heic.ts`）が先に RGBA へ解いたものが来る。
+ *
+ * この型のおかげで `applyConvert` / `applyInfo` は**同期のまま**でいられる
+ * （非同期にすると node からそのまま試験できる seam が壊れる）。
+ */
+export type DecodeSource =
+  | { kind: "encoded"; bytes: ArrayBuffer }
+  | { kind: "rgba"; data: Uint8Array; width: number; height: number };
+
+/**
+ * 入力を vips 画像にする。**ここだけが「どこから来たか」を知っている。**
+ * RGBA 経路は既に画素なので、向き（`autorot`）は補助デコーダが済ませている前提。
+ */
+function sourceImage(
+  vips: Vips,
+  src: DecodeSource,
+  keep: <T extends VipsImage>(im: T) => T,
+): VipsImage {
+  if (src.kind === "rgba") {
+    // **向きは補助デコーダが適用済み**（libheif が irot/imir を処理する）。メモリ画像に
+    // EXIF は無いので、ここで autorot を重ねてはいけない。SPEC §1 手順 2。
+    return keep(vips.Image.newFromMemory(src.data, src.width, src.height, 4, "uchar"));
+  }
+  // **`[access=sequential]` は使わない。** 速くはなる（実測 6000×8000 の jpg 1020→723ms、
+  // png 2041→1757ms）が、`autorot()` が非単調に読むので **EXIF の向きが付いた画像がすべて落ちる**
+  // （実測 1600×1200: orientation=1 は通るが 3/6/8 は throw。小さい画像だと行キャッシュに
+  //  収まって再現しないので、試験で気づけない）。`bg=average` の二度読みも同じ理由で駄目。
+  // 手で「この経路は一度しか読まない」と保証し続ける類の最適化は、写真で壊れる形で裏切る。
+  const loaded = keep(vips.Image.newFromBuffer(new Uint8Array(src.bytes)));
+  return keep(loaded.autorot());
+}
+
+export async function toSource(bytes: ArrayBuffer, srcFormat: string): Promise<DecodeSource> {
+  // 拡張子が heic/heif でも、**中身が AV1 なら wasm-vips 側が読める**（補助デコーダは HEVC のみ）。
+  // 先に容器を見て振り分けるので、補助デコーダが投げた本物の理由は握り潰されない。
+  if (!needsHeicDecoder(srcFormat) || isAv1Heif(bytes)) return { kind: "encoded", bytes };
+  const { rgba, width, height } = await decodeHeicToRgba(bytes);
+  return { kind: "rgba", data: rgba, width, height };
+}
+
 export type DecodedImage = {
   rgba: Uint8Array<ArrayBuffer>;
   width: number;
@@ -105,8 +156,46 @@ export type DecodedImage = {
   thumb?: Uint8Array<ArrayBuffer>;
 };
 
+/**
+ * 中間画像を捨て漏らさないための小道具。wasm-vips のメモリは手動解放なので、
+ * 分岐の多い処理では「作ったら即 keep」に統一する（3 箇所が同じ物を書いていた）。
+ */
+function trashBag(): { keep: <T extends VipsImage>(im: T) => T; dispose: () => void } {
+  const trash: VipsImage[] = [];
+  return {
+    keep: (im) => {
+      trash.push(im);
+      return im;
+    },
+    dispose: () => {
+      for (const im of trash) im.delete();
+    },
+  };
+}
+
 /** サムネの最大辺（px）。DESIGN §6 の「~256px」。 */
 const THUMB_MAX = 256;
+/** サムネの符号化。3 箇所で同じ物を書かないため。 */
+const THUMB_SUFFIX = ".webp[Q=80]";
+
+/**
+ * 既に画素になっている画像から ~256px の webp サムネを作る。
+ * 透過は premultiply→resize→unpremultiply でエッジのフリンジを防ぐ。dHash 用の 9x8 とは別物。
+ */
+function thumbBytes(img: VipsImage): Uint8Array<ArrayBuffer> {
+  const { keep, dispose } = trashBag();
+  try {
+    const scale = Math.min(1, THUMB_MAX / Math.max(img.width, img.height));
+    const pm = keep(img.premultiply());
+    const rs = keep(pm.resize(scale));
+    const um = keep(rs.unpremultiply());
+    const uc = um.cast("uchar");
+    if (uc !== um) keep(uc);
+    return new Uint8Array(uc.writeToBuffer(THUMB_SUFFIX));
+  } finally {
+    dispose();
+  }
+}
 
 /// バイト列を sRGB RGBA（straight alpha・uchar・4band・行優先）へデコードする。SPEC §1 手順 1〜3。
 /// 手順は CLI `decode.rs::decode_canonical` と同順（autorot→sRGB→3band なら addalpha→cast uchar）。
@@ -114,59 +203,63 @@ const THUMB_MAX = 256;
 /// wantThumb 指定時は、デコード済み画像から ~256px の webp サムネも生成する（デコードのついで・DESIGN §6）。
 export async function decodeCanonical(
   bytes: ArrayBuffer,
-  wantThumb = false,
+  wantThumb: boolean,
+  srcFormat: string,
 ): Promise<DecodedImage> {
   const vips = await getVips();
-  const trash: VipsImage[] = [];
+  const source = await toSource(bytes, srcFormat);
+
+  // **補助デコーダ経由（HEIC）は、もう欲しい形そのもの。** libheif が返すのは
+  // sRGB の straight-alpha RGBA（4band・uchar）で、vips を通しても
+  // **入出力の sha256 が一致する**ことを確かめてある。往復させると 12MP で
+  // 約 146MB（vips ヒープへの複製 + writeToMemory + JS へのコピー）を無駄に使う。
+  if (source.kind === "rgba" && !wantThumb) {
+    return {
+      rgba: source.data as Uint8Array<ArrayBuffer>,
+      width: source.width,
+      height: source.height,
+    };
+  }
+
+  const { keep, dispose } = trashBag();
   try {
-    const src = vips.Image.newFromBuffer(new Uint8Array(bytes));
-    trash.push(src);
-    const rotated = src.autorot();
-    trash.push(rotated);
-    const srgb = rotated.colourspace("srgb");
-    trash.push(srgb);
+    const rotated = sourceImage(vips, source, keep);
+    const srgb = keep(rotated.colourspace("srgb"));
 
     let rgbaImg: VipsImage;
     if (srgb.bands === 4) {
       rgbaImg = srgb;
     } else if (srgb.bands === 3) {
-      rgbaImg = srgb.addalpha();
-      trash.push(rgbaImg);
+      rgbaImg = keep(srgb.addalpha());
     } else {
       throw new Error(`想定外のバンド数 ${srgb.bands}（RGB/RGBA のみ対応）`);
     }
     const casted = rgbaImg.cast("uchar");
-    if (casted !== rgbaImg) trash.push(casted);
+    if (casted !== rgbaImg) keep(casted);
 
     const { width, height } = casted;
 
-    // サムネ（原比率で最大辺 256 に縮小・webp）。透過は premultiply→resize→unpremultiply でエッジの
-    // フリンジを防ぐ。dHash 用の 9x8 とは別物。生成失敗は**致命でない**（dHash は成功済み）ので握り潰し
-    // thumb 無しにする（表示は原 File / IDB にフォールバック）＝cosmetic な失敗で画像を dedup から落とさない。
+    // サムネの生成失敗は**致命でない**（dHash は成功済み）ので握り潰して thumb 無しにする
+    // ＝ cosmetic な失敗で画像を dedup から落とさない（表示は原 File / IDB にフォールバック）。
     let thumb: Uint8Array<ArrayBuffer> | undefined;
     if (wantThumb) {
       try {
-        const scale = Math.min(1, THUMB_MAX / Math.max(width, height));
-        const pm = casted.premultiply();
-        trash.push(pm);
-        const rs = pm.resize(scale);
-        trash.push(rs);
-        const um = rs.unpremultiply();
-        trash.push(um);
-        const uc = um.cast("uchar");
-        if (uc !== um) trash.push(uc);
-        thumb = new Uint8Array(uc.writeToBuffer(".webp[Q=80]"));
+        thumb = thumbBytes(casted);
       } catch {
         thumb = undefined;
       }
     }
 
-    // writeToMemory は vips（SharedArrayBuffer）ヒープ上の view を返し得る。非 SAB な ArrayBuffer へ
-    // コピーして返す（delete 後も安全・crypto.subtle など BufferSource を要求する API にも渡せる）。
-    const rgba = new Uint8Array(casted.writeToMemory());
+    // 補助デコーダ経由なら画素はもう手元にある（上の早期 return と同じ理由で往復させない）。
+    // それ以外は writeToMemory が vips（SharedArrayBuffer）ヒープ上の view を返し得るので、
+    // 非 SAB な ArrayBuffer へコピーして返す（delete 後も安全）。
+    const rgba =
+      source.kind === "rgba"
+        ? (source.data as Uint8Array<ArrayBuffer>)
+        : new Uint8Array(casted.writeToMemory());
     return { rgba, width, height, thumb };
   } finally {
-    for (const im of trash) im.delete(); // wasm-vips のメモリは手動解放（leak 防止）。
+    dispose(); // wasm-vips のメモリは手動解放（leak 防止）。
   }
 }
 
@@ -179,8 +272,8 @@ export type ImageInfo = {
 };
 
 /** [`applyInfo`] のブラウザ向け入口。 */
-export async function imageInfo(bytes: ArrayBuffer): Promise<ImageInfo> {
-  return applyInfo(await getVips(), bytes);
+export async function imageInfo(bytes: ArrayBuffer, srcFormat = ""): Promise<ImageInfo> {
+  return applyInfo(await getVips(), await toSource(bytes, srcFormat));
 }
 
 /**
@@ -194,21 +287,27 @@ export async function imageInfo(bytes: ArrayBuffer): Promise<ImageInfo> {
  * （libvips は遅延評価なので、寸法が読めても実際に描けるとは限らない。
  *   web の wasm-vips は HEVC の HEIC がこれに当たる）。
  */
-export function applyInfo(vips: Vips, bytes: ArrayBuffer): ImageInfo {
-  const trash: VipsImage[] = [];
-  const keep = <T extends VipsImage>(im: T): T => {
-    trash.push(im);
-    return im;
-  };
+export function applyInfo(vips: Vips, source: DecodeSource): ImageInfo {
+  const { keep, dispose } = trashBag();
   try {
-    const u8 = new Uint8Array(bytes);
     // 原寸はヘッダだけで分かる（autorot も遅延なので、ここでは画素を触らない）。
-    const rotated = keep(keep(vips.Image.newFromBuffer(u8)).autorot());
-    const { width, height } = rotated;
-    const t = keep(vips.Image.thumbnailBuffer(u8, THUMB_MAX, { height: THUMB_MAX, size: "down" }));
-    return { width, height, thumb: new Uint8Array(t.writeToBuffer(".webp[Q=80]")) };
+    const img = sourceImage(vips, source, keep);
+    // **サムネの作り方だけが分かれる。** 符号化済みなら shrink-on-load（1/8 解像度で読む）、
+    // 既に画素なら縮小するしかない。
+    const thumb =
+      source.kind === "encoded"
+        ? new Uint8Array(
+            keep(
+              vips.Image.thumbnailBuffer(new Uint8Array(source.bytes), THUMB_MAX, {
+                height: THUMB_MAX,
+                size: "down",
+              }),
+            ).writeToBuffer(THUMB_SUFFIX),
+          )
+        : thumbBytes(img);
+    return { width: img.width, height: img.height, thumb };
   } finally {
-    for (const im of trash) im.delete();
+    dispose();
   }
 }
 
@@ -269,7 +368,11 @@ export async function convertBuffer(
   options: ConvertOptions,
   srcFormat: string,
 ): Promise<ConvertedImage> {
-  return applyConvert(await getVips(), bytes, options, srcFormat);
+  // **デコードより先に「書けるか」を見る。** HEIC は補助デコーダで全画素を起こすので、
+  // 書けない形式のために 48MP を解いてから失敗する、が一番高くつく。
+  const outFormat = normalizeOutFormat(options.format ?? srcFormat);
+  if (!saveSpec(outFormat, options.quality)) throw new Error(`${outFormat} には書き出せません`);
+  return applyConvert(await getVips(), await toSource(bytes, srcFormat), options, srcFormat);
 }
 
 /**
@@ -278,21 +381,15 @@ export async function convertBuffer(
  */
 export function applyConvert(
   vips: Vips,
-  bytes: ArrayBuffer,
+  source: DecodeSource,
   options: ConvertOptions,
   srcFormat: string,
 ): ConvertedImage {
-  const trash: VipsImage[] = [];
-  /** 中間画像を捨て漏らさないための小道具（分岐が多いので都度 push する）。 */
-  const keep = <T extends VipsImage>(im: T): T => {
-    trash.push(im);
-    return im;
-  };
+  const { keep, dispose } = trashBag();
   try {
-    const loaded = keep(vips.Image.newFromBuffer(new Uint8Array(bytes)));
-    let img = keep(loaded.autorot());
-
     const outFormat = normalizeOutFormat(options.format ?? srcFormat);
+    let img = sourceImage(vips, source, keep);
+
     const plan = planGeometry({
       srcW: img.width,
       srcH: img.height,
@@ -305,13 +402,15 @@ export function applyConvert(
     // 寸法を指定していても、この画像には効かない（拡大要求など）ことがある。
     // 出力形式も同じなら**再符号化せず元のバイト列を返す**（SPEC §5.4 規則 4）。
     // 寸法はデコード済みなので、素通しでも正しい値を返せる。
+    // 素通しは**元のバイト列がある場合だけ**（補助デコーダ経由には元の符号化が無い）。
     if (
+      source.kind === "encoded" &&
       !options.forceReencode &&
       plan.kind === "noop" &&
       outFormat === normalizeOutFormat(srcFormat)
     ) {
       return {
-        out: new Uint8Array(bytes),
+        out: new Uint8Array(source.bytes),
         width: img.width,
         height: img.height,
         passedThrough: true,
@@ -343,11 +442,20 @@ export function applyConvert(
     }
 
     const spec = saveSpec(outFormat, options.quality);
+    // 書けない形式は**ここまで来ない**のが正（画面が実行前に止める）。念のため読める文言で。
+    if (!spec) throw new Error(`${outFormat} には書き出せません`);
     // TIFF だけ保存前に sRGB へ寄せる（参照実装 save_image.rs と同じ）。
     const target = spec.needsSrgb ? keep(img.colourspace("srgb")) : img;
-    const out = new Uint8Array(target.writeToBuffer(spec.suffix, spec.options));
+    // **wasm の例外はそのまま文字列にすると `[object WebAssembly.Exception]` にしかならない。**
+    // ここは何をしようとして失敗したかが分かっているので、読める文言に言い換える。
+    let out: Uint8Array<ArrayBuffer>;
+    try {
+      out = new Uint8Array(target.writeToBuffer(spec.suffix, spec.options));
+    } catch (e) {
+      throw new Error(`${outFormat} で書き出せませんでした`, { cause: e });
+    }
     return { out, width: target.width, height: target.height, vipsVersion: vips.version() };
   } finally {
-    for (const im of trash) im.delete(); // wasm-vips のメモリは手動解放（leak 防止）。
+    dispose(); // wasm-vips のメモリは手動解放（leak 防止）。
   }
 }

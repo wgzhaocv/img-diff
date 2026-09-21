@@ -252,10 +252,21 @@ export type SaveSpec = {
 };
 
 /**
+ * **書き出せる形式。** 下の `saveSpec` の switch と**同じ場所に置く** —— 一覧を別ファイルに
+ * 持つと「switch に足したのに選択肢に出ない」が起きる（`saveSpec` が null を返す方向は
+ * 気づけるが、逆は気づけない）。順序はそのまま画面の選択肢の順序になる。
+ */
+export const WRITABLE_FORMATS = ["jpg", "png", "webp", "avif", "jxl", "gif", "tiff", "ppm"];
+
+/**
  * 形式ごとの保存指定（参照実装 `save_image.rs` と同じ設定）。
  * png / gif / ppm は品質を受け付けないので `Q` を渡さない（渡すと libvips が失敗する）。
+ *
+ * **書けない形式には `null` を返す。ここが「何を書けるか」の唯一の正本**
+ * （heic は符号化器の配布条件、svg / bmp は libvips に保存器が無い）。
+ * 画面の選択肢も検証もこの switch から導くので、形式を足すときはここだけを直せばよい。
  */
-export function saveSpec(outFormat: string, quality: number): SaveSpec {
+export function saveSpec(outFormat: string, quality: number): SaveSpec | null {
   const f = normalizeOutFormat(outFormat);
   const Q = clampQuality(quality);
   switch (f) {
@@ -292,9 +303,16 @@ export function saveSpec(outFormat: string, quality: number): SaveSpec {
       };
     case "avif":
       return { suffix: ".avif", options: { Q, compression: "av1" }, needsSrgb: false };
+    case "jxl":
+      return { suffix: ".jxl", options: { Q }, needsSrgb: false };
+    case "ppm":
+      // ppm は Q を受け付けない。
+      return { suffix: ".ppm", options: {}, needsSrgb: false };
     default:
-      // jxl（web のみ）と ppm など。ppm は Q を受け付けないので付けない。
-      return { suffix: `.${f}`, options: f === "ppm" ? {} : { Q }, needsSrgb: false };
+      // **知らない形式は「書けない」**。以前はここで `.${f}` を作って返していたので、
+      // heic や svg も「書ける」ことになり、失敗が wasm の例外としてしか現れなかった
+      // （画面には `[object WebAssembly.Exception]` と出ていた）。
+      return null;
   }
 }
 

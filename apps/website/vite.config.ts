@@ -30,6 +30,25 @@ function copyWasmVips(): PluginOption {
 }
 
 /**
+ * libheif の wasm を public/libheif へ置く。**HEVC の HEIC 専用の補助デコーダ**で、
+ * wasm-vips の libheif が HEVC を持たないぶんを補う（workers/heic.ts）。
+ * グルー（91KB）は普通に bundle され、wasm（1.4MB）だけ実ファイルで配る
+ * —— 埋め込み版（libheif-bundle.mjs）だと転送が gzip 0.48MB → 0.70MB に増える。
+ */
+function copyLibheif(): PluginOption {
+  const require = createRequire(import.meta.url);
+  const libDir = dirname(require.resolve("libheif-js/libheif-wasm/libheif.js"));
+  const dstDir = fileURLToPath(new URL("./public/libheif", import.meta.url));
+  return {
+    name: "copy-libheif",
+    async buildStart() {
+      await mkdir(dstDir, { recursive: true });
+      await copyFile(join(libDir, "libheif.wasm"), join(dstDir, "libheif.wasm"));
+    },
+  };
+}
+
+/**
  * dev サーバで `/vips/*` への `?import` 付き要求を素のパスへ戻す。
  *
  * 動的 import（`workers/vips.ts` の `/vips/vips-es6.js`）に対し、Vite の dev は解析のため
@@ -79,7 +98,14 @@ function emitRouteFallbacks(): PluginOption {
 // dev サーバでも COOP/COEP を付け cross-origin isolation を有効化する
 // （SharedArrayBuffer が要る wasm-vips のため。本番は public/_headers で付与）。
 export default defineConfig({
-  plugins: [react(), tailwindcss(), copyWasmVips(), serveVipsInDev(), emitRouteFallbacks()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    copyWasmVips(),
+    copyLibheif(),
+    serveVipsInDev(),
+    emitRouteFallbacks(),
+  ],
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),

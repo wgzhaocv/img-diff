@@ -7,7 +7,12 @@
 
 import { beforeAll, describe, expect, it } from "vite-plus/test";
 import type { ConvertOptions } from "schema";
-import { applyConvert, applyInfo, type Vips } from "@/workers/vips";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { applyConvert, applyInfo, type DecodeSource, type Vips } from "@/workers/vips";
+
+/** 符号化済みバイト列を入力の形にする（HEIC 以外はこちら）。 */
+const enc = (bytes: ArrayBuffer): DecodeSource => ({ kind: "encoded", bytes });
 
 let vips: Vips;
 /** `makePng` は node 版の API（`newFromMemory`）を使うので、同じ実体を別の型で持つ。 */
@@ -119,9 +124,32 @@ describe("出力形式", () => {
     jxl: "jxlload_buffer",
   };
 
+  it("**書けない形式は実際に投げる**（一覧が libvips と食い違っていないか）", () => {
+    // 一覧を「自分自身」と突き合わせても意味が無い。本物の wasm-vips に対して、
+    // 書けないと言っている形式が本当に書けないことを確かめる。
+    for (const format of ["heic", "heif", "svg", "bmp"]) {
+      expect(
+        () => applyConvert(vips, enc(squarePng), { ...defaults, format }, "png"),
+        format,
+      ).toThrow();
+    }
+  });
+
+  it("平均色の背景でも壊れない（二度読みするので sequential にしない経路）", () => {
+    // `bg=average` は「縮小後から平均を取る → その色で埋める」＝同じ入力を 2 回読む。
+    // sequential で読んでいると libvips が拒否するので、その組み合わせだけ既定で読む。
+    const r = applyConvert(
+      vips,
+      enc(widePng),
+      { ...defaults, width: 60, height: 60, fit: "contain", background: "average" },
+      "png",
+    );
+    expect(inspect(r.out).width).toBe(60);
+  });
+
   it("書ける形式をすべて往復できる（jxl / avif を含む）", () => {
     for (const [format, loader] of Object.entries(LOADER)) {
-      const r = applyConvert(vips, squarePng, { ...defaults, format }, "png");
+      const r = applyConvert(vips, enc(squarePng), { ...defaults, format }, "png");
       expect(r.out.byteLength, format).toBeGreaterThan(0);
       const got = inspect(r.out);
       expect(got.width, format).toBe(100);
@@ -131,19 +159,21 @@ describe("出力形式", () => {
 
   it("別名は正規化される（jpeg → jpg / tif → tiff）", () => {
     const of = (format: string): string =>
-      inspect(applyConvert(vips, squarePng, { ...defaults, format }, "png").out).loader;
+      inspect(applyConvert(vips, enc(squarePng), { ...defaults, format }, "png").out).loader;
     expect(of("jpeg")).toBe("jpegload_buffer");
     expect(of("tif")).toBe("tiffload_buffer");
   });
 
   it("heic は書けない（SPEC §5.4 でやらないと決めた形式）", () => {
-    expect(() => applyConvert(vips, squarePng, { ...defaults, format: "heic" }, "png")).toThrow();
+    expect(() =>
+      applyConvert(vips, enc(squarePng), { ...defaults, format: "heic" }, "png"),
+    ).toThrow();
   });
 
   it("gif / ppm は Q を付けずに書ける（付けると libvips が失敗する）", () => {
     for (const format of ["gif", "ppm"]) {
       expect(() =>
-        applyConvert(vips, squarePng, { ...defaults, format, quality: 50 }, "png"),
+        applyConvert(vips, enc(squarePng), { ...defaults, format, quality: 50 }, "png"),
       ).not.toThrow();
     }
   });
@@ -151,14 +181,14 @@ describe("出力形式", () => {
 
 describe("fit ごとの実寸法", () => {
   it("cover は目標ちょうど", () => {
-    const r = applyConvert(vips, widePng, { ...defaults, width: 40, height: 30 }, "png");
+    const r = applyConvert(vips, enc(widePng), { ...defaults, width: 40, height: 30 }, "png");
     expect(inspect(r.out)).toMatchObject({ width: 40, height: 30 });
   });
 
   it("contain も目標ちょうど（余白は背景で埋まる）", () => {
     const r = applyConvert(
       vips,
-      widePng,
+      enc(widePng),
       { ...defaults, width: 40, height: 30, fit: "contain" },
       "png",
     );
@@ -168,7 +198,7 @@ describe("fit ごとの実寸法", () => {
   it("fill は非等比に引き伸ばす", () => {
     const r = applyConvert(
       vips,
-      widePng,
+      enc(widePng),
       { ...defaults, width: 50, height: 40, fit: "fill" },
       "png",
     );
@@ -176,7 +206,7 @@ describe("fit ごとの実寸法", () => {
   });
 
   it("拡大はしない（目標が大きくても元の寸法のまま）", () => {
-    const r = applyConvert(vips, widePng, { ...defaults, width: 500, height: 500 }, "png");
+    const r = applyConvert(vips, enc(widePng), { ...defaults, width: 500, height: 500 }, "png");
     expect(inspect(r.out)).toMatchObject({ width: 100, height: 50 });
   });
 });
@@ -185,7 +215,7 @@ describe("contain の背景", () => {
   it("transparent は alpha を足して角が透明になる", () => {
     const r = applyConvert(
       vips,
-      widePng,
+      enc(widePng),
       { ...defaults, width: 40, height: 30, fit: "contain", background: "transparent" },
       "png",
     );
@@ -195,7 +225,7 @@ describe("contain の背景", () => {
   it("hex 背景では alpha を増やさない（3 バンドのまま）", () => {
     const r = applyConvert(
       vips,
-      widePng,
+      enc(widePng),
       { ...defaults, width: 40, height: 30, fit: "contain", background: "ff0000" },
       "png",
     );
@@ -205,7 +235,7 @@ describe("contain の背景", () => {
   it("average 背景でも破綻しない", () => {
     const r = applyConvert(
       vips,
-      widePng,
+      enc(widePng),
       { ...defaults, width: 40, height: 30, fit: "contain", background: "average" },
       "png",
     );
@@ -250,7 +280,7 @@ describe("グレースケール（bands が 3/4 でない画像）", () => {
   it("1band を contain + hex 背景で変換できる", () => {
     const r = applyConvert(
       vips,
-      gray1,
+      enc(gray1),
       { ...defaults, width: 40, height: 40, fit: "contain", background: "ff0000" },
       "png",
     );
@@ -260,7 +290,7 @@ describe("グレースケール（bands が 3/4 でない画像）", () => {
   it("1band を contain + transparent で変換できる", () => {
     const r = applyConvert(
       vips,
-      gray1,
+      enc(gray1),
       { ...defaults, width: 40, height: 40, fit: "contain", background: "transparent" },
       "png",
     );
@@ -270,7 +300,7 @@ describe("グレースケール（bands が 3/4 でない画像）", () => {
   it("1band を contain + average で変換できる", () => {
     const r = applyConvert(
       vips,
-      gray1,
+      enc(gray1),
       { ...defaults, width: 40, height: 40, fit: "contain", background: "average" },
       "png",
     );
@@ -280,7 +310,7 @@ describe("グレースケール（bands が 3/4 でない画像）", () => {
   it("2band（グレー + アルファ）も変換できる", () => {
     const r = applyConvert(
       vips,
-      gray2,
+      enc(gray2),
       { ...defaults, width: 40, height: 40, fit: "contain", background: "ff0000" },
       "png",
     );
@@ -304,13 +334,13 @@ describe("gravity", () => {
   it("west は左側（明るい方）、east は右側（暗い方）を切り出す", () => {
     const west = applyConvert(
       vips,
-      widePng,
+      enc(widePng),
       { ...defaults, width: 40, height: 30, gravity: "west" },
       "png",
     );
     const east = applyConvert(
       vips,
-      widePng,
+      enc(widePng),
       { ...defaults, width: 40, height: 30, gravity: "east" },
       "png",
     );
@@ -320,7 +350,7 @@ describe("gravity", () => {
 
 describe("入力一覧の情報取得（applyInfo）", () => {
   it("原寸とサムネを返し、**全分解能の複製を作らない**", () => {
-    const r = applyInfo(vips, widePng); // 100×50
+    const r = applyInfo(vips, enc(widePng)); // 100×50
     expect(r.width).toBe(100);
     expect(r.height).toBe(50);
     // 長辺 256 に収める＝拡大はしないので原寸のまま。
@@ -331,7 +361,7 @@ describe("入力一覧の情報取得（applyInfo）", () => {
 
   it("大きい画像は長辺 256 まで縮む（縦横比は保つ）", () => {
     const big = makePng(vipsNode, 1024, 512);
-    const r = applyInfo(vips, big);
+    const r = applyInfo(vips, enc(big));
     expect(r.width).toBe(1024);
     expect(r.height).toBe(512);
     const th = inspect(r.thumb);
@@ -340,6 +370,49 @@ describe("入力一覧の情報取得（applyInfo）", () => {
 
   it("デコードできない入力は握り潰さず投げる（画面が「読み込めません」と言えるように）", () => {
     const garbage = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]).buffer;
-    expect(() => applyInfo(vips, garbage)).toThrow();
+    expect(() => applyInfo(vips, enc(garbage))).toThrow();
+  });
+});
+
+describe("EXIF の向きが付いた実ファイル", () => {
+  // **合成 PNG だけで試験していると気づけない穴がある。** 実際、読み込みを
+  // `[access=sequential]` にしたとき、向きの付いた jpeg が**すべて**落ちるようになったのに
+  // 合成夹具は素通しした（`autorot` が非単調に読むため。小さい画像だと行キャッシュに収まって
+  // 再現もしない）。1600×1200・orientation=6 の実ファイルで、その経路を踏み続ける。
+  const rotated: ArrayBuffer = new Uint8Array(
+    readFileSync(fileURLToPath(new URL("./fixtures/rotated.jpg", import.meta.url))),
+  ).buffer;
+
+  it("向きを適用して縦横が入れ替わる", () => {
+    const r = applyConvert(vips, enc(rotated), { ...defaults, format: "png" }, "jpg");
+    const got = inspect(r.out);
+    // 1600×1200 を 90 度回すので 1200×1600。
+    expect([got.width, got.height]).toEqual([1200, 1600]);
+  });
+
+  it("書ける形式すべてで落ちない", () => {
+    // avif は 1600×1200 だと秒単位かかるので外す（別の試験が符号化そのものを見ている）。
+    for (const format of ["jpg", "png", "webp", "tiff"]) {
+      expect(
+        () => applyConvert(vips, enc(rotated), { ...defaults, format }, "jpg"),
+        format,
+      ).not.toThrow();
+    }
+  });
+
+  it("平均色の背景（二度読みする経路）でも落ちない", () => {
+    expect(() =>
+      applyConvert(
+        vips,
+        enc(rotated),
+        { ...defaults, width: 400, height: 400, fit: "contain", background: "average" },
+        "jpg",
+      ),
+    ).not.toThrow();
+  });
+
+  it("入力一覧の情報も取れる", () => {
+    const info = applyInfo(vips, enc(rotated));
+    expect([info.width, info.height]).toEqual([1200, 1600]);
   });
 });

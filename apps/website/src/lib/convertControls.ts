@@ -4,13 +4,15 @@
 // 純関数（vips にも DOM にも依存しない）なので、そのまま試験できる。
 
 import {
+  isPassThrough,
   normalizeOutFormat,
+  WRITABLE_FORMATS,
   parseDim,
   planGeometry,
   saveSpec,
   type ConvertPlan,
 } from "@/lib/convertPlan";
-import type { ConvertFit, ConvertGravity } from "schema";
+import type { ConvertFit, ConvertGravity, ConvertOptions } from "schema";
 
 /** 各欄を画面に出すか。false の欄は **DOM ごと出さない**（灰色で残さない）。 */
 export type ControlRelevance = {
@@ -26,10 +28,33 @@ export type ControlRelevance = {
 };
 
 /**
- * **書き出せる形式**（実測で確認済み。heic / bmp / svg は libvips が書けない）。
- * 出力形式の選択肢そのものであり、「入力と同じ形式」のときに何が起きるかの判定にも使う。
+ * **全画素をメモリに載せないと書けない形式。**
+ * libwebp / libheif / gif の量子化 / libjxl は逐行書き出しの口を持たないので、
+ * libvips が流式に処理していても、保存の瞬間に幅×高さ×4 バイトを一度に要求する。
+ * jpg と png は逐行で書けるので、6000×8000 でも通る（実測）。
  */
-export const WRITABLE_FORMATS = ["jpg", "png", "webp", "avif", "jxl", "gif", "tiff", "ppm"];
+const WHOLE_IMAGE_SAVERS = ["webp", "avif", "gif", "jxl"];
+
+/**
+ * wasm のヒープで一度に載せられる画素数の上限（目安）。
+ *
+ * 実測: 6000×8000（48MP）の webp は `out of memory -- size == 137MB` で落ち、
+ * 4000×3000（12MP）は通る。安全側に 16MP を境にする。
+ */
+const WHOLE_IMAGE_MAX_PIXELS = 16_000_000;
+
+/**
+ * その出力が**大きすぎて書けない**なら、理由を返す。
+ * 落ちてから謝るのではなく、押す前に「寸法を小さくすれば書ける」と言うための判定。
+ */
+function tooLargeForFormat(outFormat: string, width: number, height: number): string | null {
+  const f = normalizeOutFormat(outFormat);
+  if (!WHOLE_IMAGE_SAVERS.includes(f)) return null;
+  if (width * height <= WHOLE_IMAGE_MAX_PIXELS) return null;
+  return `${width}×${height} のままでは ${f} に書き出せません（寸法を小さくしてください）`;
+}
+
+export { WRITABLE_FORMATS };
 
 /** 合わせ方の全値。画面の分段コントロールと、保存済み設定の検証が共有する。 */
 export const FIT_VALUES: ConvertFit[] = ["cover", "contain", "fill"];
@@ -63,7 +88,8 @@ export type RelevanceInput = {
  * （png / tiff / gif / ppm）はそこで分岐している。写すと形式を足したときに片方だけ古くなる。
  */
 export function qualityApplies(outFormat: string): boolean {
-  return "Q" in saveSpec(outFormat, 80).options;
+  const spec = saveSpec(outFormat, 80);
+  return spec != null && "Q" in spec.options;
 }
 
 /**
@@ -98,8 +124,8 @@ export function relevantControls(
   const quality =
     out === ""
       ? srcFormats.some((f) => {
-          const fm = normalizeOutFormat(f);
-          return WRITABLE_FORMATS.includes(fm) && qualityApplies(fm);
+          // `qualityApplies` は saveSpec に聞くので、書けない形式は自動的に false。
+          return qualityApplies(f);
         })
       : qualityApplies(normalizeOutFormat(out));
 
@@ -195,6 +221,33 @@ const MIME: Record<string, string> = {
 
 export function mimeOf(outFormat: string): string {
   return MIME[normalizeOutFormat(outFormat)] ?? "application/octet-stream";
+}
+
+export function cannotWriteReason(
+  options: ConvertOptions,
+  srcFormat: string,
+  /**
+   * 計画の結果（原寸が分かるときだけ）。**worker と同じ条件で素通しを判定する**ために要る:
+   * 「寸法を指定していても、その画像には効かない（= plan が noop）」なら元のバイト列が
+   * そのまま出るので、書ける形式かどうかも大きさも関係ない。
+   */
+  planned?: { noop: boolean; width: number; height: number },
+): string | null {
+  const out = normalizeOutFormat(options.format ?? srcFormat);
+  const sameFormat = out === normalizeOutFormat(srcFormat);
+  // 素通し（vips.ts の早期 return と同じ条件）。原寸が分からないときは文字列だけで判断する。
+  const passes = planned
+    ? !options.forceReencode && planned.noop && sameFormat
+    : isPassThrough(options, srcFormat);
+  if (passes) return null;
+
+  // 拡張子の無いファイルは `""` になる。**空文字は falsy なので、返すと「書ける」と誤判定される。**
+  if (out === "") return "この形式 は書き出せません。出力形式を選んでください。";
+  if (!WRITABLE_FORMATS.includes(out)) {
+    return `${out} は書き出せません。出力形式を選んでください。`;
+  }
+  if (!planned) return null;
+  return tooLargeForFormat(out, planned.width, planned.height);
 }
 
 /** MIME から拡張子へ（貼り付けた画像は名前に拡張子が無いことがある）。 */

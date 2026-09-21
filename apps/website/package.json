@@ -13,6 +13,7 @@
     "client-zip": "^2.5.1",
     "clsx": "^2.1.1",
     "idb": "^8.0.3",
+    "libheif-js": "^1.23.2",
     "lucide-react": "^1.22.0",
     "radix-ui": "^1.6.1",
     "react": "^19.2.7",

@@ -35,10 +35,10 @@ import { DEFAULT_FORM, representativePath, useConvertStore } from "@/lib/stores/
 // `lib/convertControls.ts` に集約してあり、ここでは真偽値を見るだけにする。
 // 隠しても `form` の値は消さないので、条件が戻れば前の入力がそのまま復活する。
 
-const FIT_LABEL: Record<ConvertFit, { label: string; hint: string }> = {
-  cover: { label: "切り抜く", hint: "指定寸法を埋めるように縮小し、はみ出た分を切り取ります。" },
-  contain: { label: "収める", hint: "縦横比を保って収め、余った部分を背景色で埋めます。" },
-  fill: { label: "引き伸ばす", hint: "縦横比を無視して指定寸法に合わせます。" },
+const FIT_LABEL: Record<ConvertFit, string> = {
+  cover: "切り抜く",
+  contain: "収める",
+  fill: "引き伸ばす",
 };
 
 const GRAVITY_LABEL: Record<ConvertGravity, string> = {
@@ -112,10 +112,9 @@ export function ConvertOptions() {
           <span className="pb-2 text-sm text-muted-foreground">px</span>
         </div>
         <OriginalSize />
+        {/* 「拡大しない」だけは画面から読み取れないので残す。他は結果が見えている。 */}
         <p className="text-sm text-muted-foreground">
-          元より大きい値を入れても
-          <strong className="font-medium text-foreground">拡大はしません</strong>。
-          {onlyOneDim ? " 片方だけの指定では、縦横比を保って縮小します。" : null}
+          拡大はしません{onlyOneDim ? "・片方だけなら縦横比を保ちます" : null}
         </p>
       </fieldset>
 
@@ -126,12 +125,11 @@ export function ConvertOptions() {
             <TabsList>
               {FIT_VALUES.map((f) => (
                 <TabsTrigger key={f} value={f}>
-                  {FIT_LABEL[f].label}
+                  {FIT_LABEL[f]}
                 </TabsTrigger>
               ))}
             </TabsList>
           </Tabs>
-          <p className="text-sm text-muted-foreground">{FIT_LABEL[form.fit].hint}</p>
         </fieldset>
       ) : null}
 
@@ -177,11 +175,6 @@ export function ConvertOptions() {
                 setForm({ quality: v ?? DEFAULT_FORM.quality, qualityTouched: true })
               }
             />
-            {form.qualityTouched ? (
-              <p className="text-sm text-muted-foreground">
-                画質を指定したので、形式が同じでも圧縮し直します。
-              </p>
-            ) : null}
           </div>
         </fieldset>
       ) : null}
@@ -238,16 +231,11 @@ function BackgroundField({ disabled }: { disabled: boolean }) {
         <Input
           id="cv-bg"
           aria-label="背景色"
-          placeholder="形式で自動"
-          className="w-40 font-mono"
+          placeholder="transparent / average / ffffff"
+          className="w-64 font-mono"
           value={background}
           onChange={(e) => setForm({ background: e.target.value })}
         />
-        <p className="text-sm text-muted-foreground">
-          「収める」で余った部分を埋める色です。<code className="font-mono">transparent</code> /{" "}
-          <code className="font-mono">average</code> / 6 桁の 16 進数。空欄なら png・webp・tiff
-          は透明、それ以外は白。
-        </p>
       </div>
     </fieldset>
   );
@@ -266,11 +254,7 @@ function GravityPad({ disabled, axes }: { disabled: boolean; axes: ControlReleva
   return (
     <fieldset className="space-y-3" disabled={disabled}>
       <legend className="text-sm font-medium">寄せる位置</legend>
-      <div
-        className="grid w-full max-w-60 grid-cols-3 gap-2"
-        role="radiogroup"
-        aria-label="寄せる位置"
-      >
+      <div className="grid w-fit grid-cols-3 gap-2" role="radiogroup" aria-label="寄せる位置">
         {GRAVITY_VALUES.map((g) =>
           // 効かない位置は**空きマス**にする（無効なボタンを置くと読み上げにも tab にも現れる）。
           projectGravity(g, axes) === g ? (
@@ -281,7 +265,7 @@ function GravityPad({ disabled, axes }: { disabled: boolean; axes: ControlReleva
               aria-checked={selected === g}
               onClick={() => setForm({ gravity: g })}
               className={cn(
-                "h-9 w-full rounded-md text-sm",
+                "h-9 w-20 rounded-md text-sm",
                 selected === g
                   ? "bg-secondary font-medium text-secondary-foreground ring-2 ring-primary ring-offset-1 ring-offset-background"
                   : "border border-border text-muted-foreground hover:bg-secondary/60",
@@ -290,7 +274,7 @@ function GravityPad({ disabled, axes }: { disabled: boolean; axes: ControlReleva
               {GRAVITY_LABEL[g]}
             </button>
           ) : (
-            <span key={g} className="h-9" />
+            <span key={g} className="h-9 w-20" />
           ),
         )}
       </div>

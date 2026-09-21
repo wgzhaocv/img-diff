@@ -35,6 +35,11 @@ export class HashPool {
     for (let i = 0; i < this.size; i++) this.idle.push(this.spawn());
   }
 
+  /** 仕事を抱えているか（走行中 + 順番待ち）。画面を離れたときに畳んでよいかの判断に使う。 */
+  busy(): boolean {
+    return this.pending.size > 0 || this.queue.length > 0;
+  }
+
   private spawn(): Worker {
     const worker = new Worker(new URL("../workers/hash.worker.ts", import.meta.url), {
       type: "module",
@@ -121,19 +126,71 @@ export class HashPool {
  *
  * 機能ごとに別の持ち手を持つこと（共有すると、convert の中断が走行中の scan まで巻き込む）。
  */
-export function poolRef(size: number): { get: () => HashPool; reset: (reason?: string) => void } {
+export function poolRef(size: number): PoolRef {
   let pool: HashPool | null = null;
-  return {
+  let holds = 0;
+  const ref: PoolRef = {
     get: () => (pool ??= new HashPool(size)),
+    hold: () => {
+      holds += 1;
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        holds -= 1;
+      };
+    },
+    idle: () => holds === 0 && (pool == null || !pool.busy()),
     reset: (reason?: string) => {
       pool?.terminate(reason);
       pool = null;
     },
   };
+  allPools.push(ref);
+  return ref;
+}
+
+export type PoolRef = {
+  get: () => HashPool;
+  /**
+   * **この持ち手を使い終わるまで畳ませない。** 戻り値を呼ぶと解除する。
+   *
+   * `HashPool.busy()` だけでは足りない —— 編排側はプールの実体を握ったまま
+   * `src.bytes()`（ファイル読み）や `sink.put()`（書き出し）を await するので、
+   * その間キューは空で「暇」に見える。実行の開始時点で全 runner が読み込み中、は普通に起きる。
+   */
+  hold: () => () => void;
+  /** 起こしていない・何も抱えていない・誰も押さえていない。 */
+  idle: () => boolean;
+  reset: (reason?: string) => void;
+};
+
+/** 作られた持ち手すべて。`releaseIdlePools` が回る先。 */
+const allPools: PoolRef[] = [];
+
+/**
+ * **今使っていないプールを畳む。** 機能ごとに持ち手が在るので、scan → compare → convert と
+ * 触ると wasm-vips の実体が 3×N 個そのまま残る（8 コアなら outer 24・内部 pthread はさらにその数倍）。
+ * 各実体は 1GiB の線形メモリを予約し、wasm のヒープは**縮まない**ので、放っておくと戻らない。
+ *
+ * 呼ぶのは画面の切り替え時（`App.tsx`）。
+ */
+export function releaseIdlePools(): void {
+  for (const ref of allPools) {
+    // **仕事中は畳まない。** 画面を切り替えても走っている変換は最後まで走らせる
+    // （`idle()` が走行中と順番待ちの両方を見る）。
+    if (ref.idle()) ref.reset();
+  }
 }
 
 /// 既定のプール本数（DESIGN §4: min(hardwareConcurrency, 8)）。
 export function defaultPoolSize(): number {
+  // 計測用の上書き（`?pool=N`）。**外層 1 本ごとに wasm-vips が丸ごと 1 つ載る**ので、
+  // 本数は実測で決めるしかない（内部 pthread と二重に並列化していないか、を見る）。
+  if (typeof location !== "undefined") {
+    const n = Number(new URLSearchParams(location.search).get("pool"));
+    if (Number.isInteger(n) && n >= 1 && n <= 16) return n;
+  }
   const cores = typeof navigator !== "undefined" ? navigator.hardwareConcurrency : undefined;
   return Math.max(1, Math.min(cores ?? 4, 8));
 }

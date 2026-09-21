@@ -26,5 +26,7 @@ dist-ssr
 *.sln
 *.sw?
 
-# wasm-vips ランタイム（node_modules から scripts/copy-vips でコピー。配布は Phase 4）
+# wasm-vips ランタイム（node_modules から vite.config.ts::copyWasmVips でコピー）
 public/vips/
+# libheif の wasm（HEVC の HEIC 用の補助デコーダ。vite.config.ts::copyLibheif でコピー）
+public/libheif/

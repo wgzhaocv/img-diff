@@ -2,6 +2,7 @@
 import init, { flatten_and_dhash, flatten_on_white } from "@/wasm/imgdiff_wasm";
 import wasmUrl from "@/wasm/imgdiff_wasm_bg.wasm?url";
 import { convertBuffer, decodeCanonical, imageInfo } from "./vips";
+import { extOf } from "@/lib/imagePaths";
 import { errText } from "@/lib/format";
 import type {
   ConvertResult,
@@ -45,7 +46,7 @@ async function decodeFull(req: WorkerRequest): Promise<Decoded> {
   const bytes = req.bytes.byteLength;
   try {
     await ensureWasm();
-    const { rgba, width, height, thumb } = await decodeCanonical(req.bytes, true);
+    const { rgba, width, height, thumb } = await decodeCanonical(req.bytes, true, extOf(req.path));
     const phash = flatten_and_dhash(rgba, width, height); // rgba は in-place 白平坦化される（＝返す RGBA）。
     return { sha256, bytes, phash, width, height, rgba, thumb };
   } catch (e) {
@@ -85,7 +86,7 @@ async function hashOne(req: WorkerRequest): Promise<HashResult> {
 async function pixelOne(req: WorkerRequest): Promise<PixelResult> {
   try {
     await ensureWasm();
-    const { rgba } = await decodeCanonical(req.bytes);
+    const { rgba } = await decodeCanonical(req.bytes, false, extOf(req.path));
     flatten_on_white(rgba); // in-place 白平坦化（alpha=255）。
     const pixelSha256 = await sha256Hex(rgba);
     return { op: "pixel", path: req.path, pixelSha256 };
@@ -159,7 +160,7 @@ async function convertOne(req: Extract<WorkerRequest, { op: "convert" }>): Promi
 async function infoOne(req: { path: string; bytes: ArrayBuffer }): Promise<InfoResult> {
   const bytes = req.bytes.byteLength;
   try {
-    const { width, height, thumb } = await imageInfo(req.bytes);
+    const { width, height, thumb } = await imageInfo(req.bytes, extOf(req.path));
     return { op: "info", path: req.path, width, height, bytes, thumb };
   } catch (e) {
     // 画素をデコードできない（web の HEVC な HEIC など）。呼び出し側は「読み込めません」と出す。

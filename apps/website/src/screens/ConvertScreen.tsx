@@ -21,9 +21,9 @@ export function ConvertScreen() {
 
   return (
     <div className="mx-auto max-w-4xl space-y-8">
+      {/* 出力先は「保存先」で、ブラウザ内完結は脚注で言っている。ここは残る 1 つだけ。 */}
       <ScreenHeader title="形式を変換">
-        寸法と形式をまとめて変換します。元のフォルダには書き込まず、別に選んだフォルダか zip
-        に出力します。処理はすべてブラウザ内で完結します。
+        寸法と形式をまとめて変換します。元のフォルダには書き込みません。
       </ScreenHeader>
 
       {hasSources ? (

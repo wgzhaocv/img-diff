@@ -28,6 +28,7 @@ export const useCompareStore = create<CompareState>((set, get) => {
   async function run(a: File, b: File): Promise<void> {
     if (running) return;
     running = true;
+    const releaseHold = pool.hold(); // 走行中は畳ませない（画面を離れても最後まで走る）
     set({ status: "comparing", phase: "decode", outcome: null });
     try {
       const outcome = await compareFiles(a, b, pool.get(), (phase) => set({ phase }));
@@ -39,6 +40,7 @@ export const useCompareStore = create<CompareState>((set, get) => {
       set({ status: "idle" });
     } finally {
       running = false;
+      releaseHold();
     }
   }
 
