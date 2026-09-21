@@ -72,13 +72,22 @@ export function ConvertPreview() {
   }
 
   const beforeUrl = useObjectUrl(before?.thumb ?? null);
-  // **今の入力から作った結果だけ**を出す。path だけで突き合わせると、設定を変えた直後や
-  // 失敗したときに古い絵が残り、それを「今の結果」として保存・コピーできてしまう。
+  // **今の入力から作った結果だけ**を「結果」として扱う。path だけで突き合わせると、
+  // 設定を変えた直後や失敗したときに古い絵が残り、それを「今の結果」として保存・コピーできてしまう。
   const shown = preview?.key === key ? preview : null;
   // 失敗の理由も**今の入力に対するもの**だけ出す（設定を変えたら前の理由は消える）。
   const error = failure?.key === key ? failure.message : null;
-  const afterUrl = useObjectUrl(shown?.blob ?? null);
-  const renderable = shown != null && isBrowserRenderable(shown.format);
+  // **絵だけは前のものを残す**（暗くして・見出しは「生成中…」）。avif は 1 枚に数秒かかるので、
+  // 作り直すたびに枠を空にすると固まったように見える。数字とボタンは `shown` にしか従わないので、
+  // 古い結果を保存・コピーできてしまうことは無い。条件は 2 つ:
+  //   - **同じ 1 枚に対する作り直しに限る**（代表を選び直したら別の画像の結果は出さない）
+  //   - **理由が出たら引っ込める**（「書き出せません」の横に絵が残っていたら嘘になる）
+  // `previewRendering` では足りない —— 入力が止まるのを待つ 300ms の間はまだ false なので、
+  // そこで一瞬だけ枠が空になる。
+  const stale = shown == null && error == null && preview?.path === path ? preview : null;
+  const pictured = shown ?? stale;
+  const afterUrl = useObjectUrl(pictured?.blob ?? null);
+  const renderable = pictured != null && isBrowserRenderable(pictured.format);
 
   if (path == null) return null;
   const name = baseNameOf(path);
@@ -113,7 +122,7 @@ export function ConvertPreview() {
               <img
                 src={afterUrl}
                 alt={`変換後: ${name}`}
-                className={cn("size-full object-contain", rendering && "opacity-50")}
+                className={cn("size-full object-contain", pictured !== shown && "opacity-50")}
               />
             ) : null}
             {afterUrl && !renderable ? (

@@ -17,6 +17,8 @@ import { findOutputCollisions, outPathFor } from "@/lib/convert";
 import { extOf, isConvertibleImage, isScannableImage, uniquePath } from "@/lib/imagePaths";
 import {
   DEFAULT_FORM,
+  previewKey,
+  previewSettled,
   rememberedForm,
   resolveOptions,
   sanitizeStoredForm,
@@ -529,5 +531,28 @@ describe("読めるが書けない形式は実行前に止める", () => {
     // 寸法も形式も指定しない＝何も変えない ⇒ 素通し。ただし「やることが無い」は別の理由で止まる。
     useConvertStore.getState().setForm({ ...DEFAULT_FORM, width: "", height: "" });
     expect(useConvertStore.getState().validate()).toMatch(/変換する指定がありません/);
+  });
+});
+
+describe("プレビューは原寸が届いてから作る", () => {
+  const src = (path: string) => ({ path, bytes: () => Promise.resolve(new ArrayBuffer(0)) });
+  const info = { width: 1024, height: 1024, bytes: 1_700_000 };
+
+  it("原寸が届くと鍵が変わる（＝先に始めた分は捨てるために符号化したことになる）", () => {
+    useConvertStore.getState().setSources([src("a.png")]);
+    useConvertStore.getState().setForm({ ...DEFAULT_FORM, format: "avif" });
+    const unknown = previewKey(useConvertStore.getState());
+    useConvertStore.setState({ sourceInfo: new Map([["a.png", info]]) });
+    expect(previewKey(useConvertStore.getState())).not.toBe(unknown);
+  });
+
+  it("原寸を知らないうちは走らせない（走らせると二度手間の上に、大きすぎる画像を止められない）", async () => {
+    useConvertStore.getState().setSources([src("a.png")]);
+    useConvertStore.getState().setForm({ ...DEFAULT_FORM, format: "avif" });
+    await useConvertStore.getState().renderPreview();
+    expect(useConvertStore.getState().preview).toBeNull();
+    expect(useConvertStore.getState().previewRendering).toBe(false);
+    // **答えを書かずに戻る**＝まだ試していない。保存ボタンはここでは押せない。
+    expect(previewSettled(useConvertStore.getState())).toBe(false);
   });
 });

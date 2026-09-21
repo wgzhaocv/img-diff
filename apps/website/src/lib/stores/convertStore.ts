@@ -537,6 +537,15 @@ export const useConvertStore = create<ConvertState>()(
         const path = representativePath(state);
         const src = state.sources.find((s) => s.path === path);
         if (!src) return;
+        // **原寸が届くまでは作らない。** 理由は 2 つあって、どちらも原寸が
+        // `previewKey` の一部だから起きる（サムネと一緒に後から届く）:
+        //   1. 原寸は「大きすぎて書けない」判定の入力（`writeBlockFor`）。知らないまま走らせると、
+        //      押す前に止めるはずの変換をプレビューだけが走らせてしまう。
+        //   2. 届いた瞬間に鍵が変わる（寸法欄も原寸で埋まる・`prefillDimensions`）ので、
+        //      先に始めた分は**捨てるために符号化する**ことになる。実測 1024×1024 の avif で
+        //      4.2s → 8.5s。「選んだ直後だけ倍遅い」の正体はこれ。
+        // デコードできなかった画像も原寸 0 で**記録される**ので、ここで詰まることはない。
+        if (!state.sourceInfo.has(src.path)) return;
         const resolved = resolveOptions(state.form);
         // 入力が不正なときは黙って前の絵を残す（理由は実行ボタンの下に出ている）。
         if ("error" in resolved) return;
@@ -632,9 +641,17 @@ export const useConvertStore = create<ConvertState>()(
             };
             set((s) => ({ sourceInfo: new Map(s.sourceInfo).set(src.path, info) }));
             prefillDimensions(src.path, info, get, set);
-          } catch {
-            // サムネは無くても変換はできる。中断（PoolAbortError）もここで飲む
-            // ——「変換を中断した」のであって、サムネの失敗を報せる場面ではない。
+          } catch (e) {
+            // サムネは無くても変換はできるので、失敗そのものは報せない。
+            // ただし**答えは必ず残す** —— プレビューは原寸が記録されるまで動かないので、
+            // 何も書かずに終わるとそこで止まってしまう（ファイルが読めなかった場合など。
+            // デコード失敗はワーカーが原寸 0 で返してくるのでここには来ない）。
+            // 中断だけは記録しない ——「変換を中断した」のであってサムネの失敗ではなく、
+            // 次の `loadSourceInfo` で取り直させたいため。
+            if (!(e instanceof PoolAbortError) && gen === sourcesGen) {
+              const failed: SourceInfo = { width: 0, height: 0, bytes: 0 };
+              set((s) => ({ sourceInfo: new Map(s.sourceInfo).set(src.path, failed) }));
+            }
           } finally {
             infoInflight.delete(src.path);
           }
