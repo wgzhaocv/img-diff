@@ -6,7 +6,7 @@ import type { ConvertOptions } from "schema";
 import { applyConvert, applyDecode, applyInfo, type DecodeSource, type Vips } from "@/workers/vips";
 import { applyHeicDecode, isAv1Heif, type HeifDecoder, type LibHeif } from "@/workers/heic";
 import { passesThrough, plannedOutput, saveSpec } from "@/lib/convertPlan";
-import { convertOptions } from "./options";
+import { bootVips, convertOptions } from "./options";
 
 // HEVC の HEIC は wasm-vips が読めないので補助デコーダ（libheif-js）で補う。SPEC §1。
 // 夹具は合成画像から作った実ファイル（SPEC §1「固定画像 + 既知 dHash」の第一歩）。
@@ -47,12 +47,7 @@ function inspect(out: Uint8Array): { width: number; height: number; loader: stri
 }
 
 beforeAll(async () => {
-  const mod = (await import("wasm-vips")) as unknown as {
-    default: (cfg?: Record<string, unknown>) => Promise<Vips>;
-  };
-  const v = await mod.default({ dynamicLibraries: ["vips-heif.wasm", "vips-jxl.wasm"] });
-  v.concurrency(1);
-  vips = v;
+  vips = await bootVips();
 
   // **本番と同じグルー**を node から読む（wasm はディスク上の実ファイルを指す）。
   const heifMod = (await import("libheif-js/libheif-wasm/libheif.js")) as unknown as {

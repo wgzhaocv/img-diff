@@ -75,7 +75,7 @@ export type DecodeResult = {
   width: number;
   height: number;
   bytes: number;
-  /** 白平坦化後の全分解能 RGBA（compare_scores / diff_highlight 用）。失敗時は無し。非 SAB。 */
+  /** 白平坦化後の全分解能 RGBA（続けて `op:"score"` へ渡す）。失敗時は無し。非 SAB。 */
   rgba?: Uint8Array<ArrayBuffer>;
   error?: string;
 };

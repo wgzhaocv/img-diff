@@ -4,6 +4,8 @@
 // この TS は web の JS/React 層が使う型。Rust 側 crates/core/src/report.rs と同じ形をミラーし、
 // 正本は SPEC.md。
 
+import scannableExts from "../scannable-exts.json" with { type: "json" };
+
 /** JSON の形（フィールド構成）のバージョン。形が壊れる変更で上げる。 */
 export const SCHEMA_VERSION = 1 as const;
 
@@ -28,31 +30,14 @@ export const HASH = {
 export const HASH_BITS = HASH.WIDTH * HASH.HEIGHT;
 
 /**
- * **scan が拾う拡張子（小文字・ドット無し）。ここが正本。**
- * web の `SCANNABLE_EXTS` と CLI の既定 `--ext` は**同じ集合でなければならない** ——
- * 片方だけが拾う画像が在ると、同じフォルダに対して両者が違う結果を出す（SPEC §1 の parity が崩れる）。
- * CLI 側は Rust なのでこの配列を import できない。`crates/cli/src/index.rs` の試験が
- * 既定値をここと突き合わせる（＝ずれたら Rust の試験が落ちる）。
+ * **scan が拾う拡張子（小文字・ドット無し）。正本は `scannable-exts.json`。**
  *
- * **`tif` と `tiff` は両方載せる** —— `parse_exts` も `extOf` も別名を畳まないので、
- * 片方しか書かないとその綴りのファイルが取りこぼされる。
- * **`svg` は入れない** —— web は resvg、CLI は libvips の svgload と**別の描画器**なので、
- * dHash が一致する保証が無い（SPEC §5.4 の形式表にも svg は無い）。
- * 変換の入力としては web だけが受ける（`CONVERTIBLE_EXTS`）。
+ * web の scan と CLI の既定 `--ext` は**同じ集合でなければならない** —— 片方だけが拾う画像が
+ * 在ると、同じフォルダに対して両者が違う結果を出す（SPEC §1 の parity が崩れる）。
+ * Rust から TS は読めないので、CLI 側は同じ json を `include_str!` で読む。
+ * 足し引きするときは json だけを直す。
  */
-export const SCANNABLE_EXTS = [
-  "jpg",
-  "jpeg",
-  "png",
-  "webp",
-  "gif",
-  "bmp",
-  "tif",
-  "tiff",
-  "heic",
-  "heif",
-  "avif",
-] as const;
+export const SCANNABLE_EXTS: readonly string[] = scannableExts.exts;
 
 /** 出力の生成元（再現性のため）。producer が違えば phash 比較は慎重に */
 export interface Producer {

@@ -34,19 +34,7 @@ echo "=== packaging imgdiff $VERSION ($TARGET, $MODDIR) ===" >&2
 
 # web の導入導線が別の tag を指したまま発版すると、install.sh は**無言で古い版を配り続ける**
 # （利用者側には何のエラーも出ない）。発版のたびに必ず通るここで止める。
-check_pin() {
-  local found
-  found="$(grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' "$1" | sort -u || true)"
-  if [ -z "$found" ]; then
-    return 0 # tag を固定していない（latest 追従）ならチェック不要
-  fi
-  if [ "$found" != "v$VERSION" ]; then
-    echo "NG: $1 の tag 固定が v$VERSION と一致しません（見つかったのは: ${found}）" >&2
-    exit 1
-  fi
-}
-check_pin apps/website/public/install.sh
-check_pin apps/website/src/screens/InstallScreen.tsx
+bash scripts/check-release-pins.sh "$VERSION"
 
 OUT="target/macos-package"
 BUNDLE="$OUT/imgdiff"

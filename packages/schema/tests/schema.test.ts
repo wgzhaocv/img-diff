@@ -17,7 +17,8 @@ test("スキーマバージョンは正の整数", () => {
 });
 
 // scan の集合は web/CLI の両方が同じでなければならない（SPEC §1 の parity）。
-// CLI 側の同値の試験は crates/cli/src/index.rs の default_ext_matches_schema。
+// **同じ形を CLI 側も見る**（crates/cli/src/index.rs の default_ext_comes_from_the_shared_list）。
+// 集合そのものは `scannable-exts.json` 1 つで、両側がそれを読む —— ここで見るのは中身の約束。
 test("scan の拡張子集合は tif/tiff を両方持ち、svg を持たない", () => {
   expect(SCANNABLE_EXTS).toContain("tif");
   expect(SCANNABLE_EXTS).toContain("tiff");

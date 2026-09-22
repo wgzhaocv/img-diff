@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { applyConvert, applyInfo, type DecodeSource, type Vips } from "@/workers/vips";
 import { passesThrough, plannedOutput } from "@/lib/convertPlan";
-import { convertOptions } from "./options";
+import { bootVips, convertOptions } from "./options";
 
 /** 符号化済みバイト列を入力の形にする（HEIC 以外はこちら）。 */
 const enc = (bytes: ArrayBuffer): DecodeSource => ({ kind: "encoded", bytes });
@@ -56,12 +56,7 @@ function makePng(v: VipsNode, w: number, h: number): ArrayBuffer {
 }
 
 beforeAll(async () => {
-  // node 版のエントリを直接読む（ブラウザ版は /vips/ の URL を前提にしていて node では動かない）。
-  const mod = (await import("wasm-vips")) as unknown as {
-    default: (cfg?: Record<string, unknown>) => Promise<VipsNode>;
-  };
-  const v = await mod.default({ dynamicLibraries: ["vips-heif.wasm", "vips-jxl.wasm"] });
-  v.concurrency(1);
+  const v = (await bootVips()) as unknown as VipsNode;
   vips = v as unknown as Vips;
   vipsNode = v;
   squarePng = makePng(v, 100, 100);

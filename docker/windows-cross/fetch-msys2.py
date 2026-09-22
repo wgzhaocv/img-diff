@@ -114,14 +114,10 @@ def main() -> int:
             return 1
         with untar_zst(blob) as t:
             for member in t.getmembers():
-                # `.BUILDINFO` 等の制御ファイルを飛ばし、`mingw64/` 前置きを落として展開する。
-                if member.name.startswith(".") or not member.name.startswith("mingw64/"):
-                    continue
-                rel = member.name[len("mingw64/") :]
-                if not rel:
-                    continue
-                if member.isdir():
-                    (out / rel).mkdir(parents=True, exist_ok=True)
+                # `mingw64/` の下だけを、その前置きを落として展開する
+                # （`.BUILDINFO` 等の制御ファイルは書庫の根に在るのでここで落ちる）。
+                rel = member.name.removeprefix("mingw64/")
+                if rel == member.name or not rel:
                     continue
                 # **link は飛ばす。** MSYS2 の一部パッケージは同じ exe を hardlink で二重に置くが、
                 # 欲しいのは DLL と開発ファイルだけで、link 先が同じ書庫に無いこともある。
@@ -129,7 +125,7 @@ def main() -> int:
                     continue
                 f = t.extractfile(member)
                 if f is None:
-                    continue
+                    continue  # ディレクトリ項目。下の mkdir が要るぶんを作るので落として良い。
                 dst = out / rel
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 with dst.open("wb") as w:

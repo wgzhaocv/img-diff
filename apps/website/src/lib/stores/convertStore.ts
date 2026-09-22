@@ -20,10 +20,11 @@ import {
   passesThrough,
   plannedOutput,
 } from "@/lib/convertPlan";
-import { PoolAbortError, poolRef } from "@/lib/workerPool";
+import { PoolAbortError, poolRef, type HashPool } from "@/lib/workerPool";
 import { errText } from "@/lib/format";
 import { browserLocalStorage, dedupedStorage } from "@/lib/persistStorage";
 import { extOf } from "@/lib/imagePaths";
+import { dedupeInFlight } from "@/lib/inflight";
 
 // convert 画面の状態ストア（zustand）。scanStore と同じ作法:
 // コンポーネント外に持つのでルート切替でも結果が残り、ワーカープールも暖まったまま使い回す。
@@ -161,13 +162,18 @@ let sourcesGen = 0;
 let previewBusy = false;
 let previewQueued = false;
 /**
- * 原寸の取得が飛んでいる**世代**（二重起動で同じ画像を二度デコードしない）。
+ * 原寸とサムネの取得（`op:"info"`）。**同じ世代の要求は 1 本にまとめる** ——
+ * まとめないと、`renderPreview` の催促が走っている最中にもう一度掛かって、
+ * 48MP の png を丸ごと二度デコードすることになる。
  *
- * 真偽値では足りない: 選び直しを跨ぐと、**古い取得の後始末が新しい取得の旗を降ろす**。
- * そうなると走っている最中の 1 枚が「未取得」に見え、`renderPreview` の催促で
- * もう一度読み込み・デコードされる（48MP の png なら丸ごと 1 回ぶんの無駄）。
+ * **鍵は「何枚目の選択か」**（`sourcesGen`）。真偽値の旗では足りないのは、選び直しを跨ぐと
+ * **古い取得の後始末が新しい取得の旗を降ろす**から —— 鍵で分ければその取り違えが起こらない。
  */
-let infoGen: number | null = null;
+const fetchInfo = dedupeInFlight(
+  (_pool: HashPool, _src: ConvertSource, gen: number) => String(gen),
+  async (p: HashPool, src: ConvertSource) =>
+    (await p.submit({ op: "info", path: src.path, blob: src.file }, [])) as InfoResult,
+);
 /**
  * エンジンの先起こし。**走っている間の再入を防ぐ**ので、画面が何度 mount しても
  * ダウンロードは 1 回で済む。
@@ -179,8 +185,13 @@ export type PreviewResult = {
   path: string;
   /** 変換後のバイト列。ブラウザが描けない形式（jxl / tiff / ppm）でも数値は正しい。 */
   blob: Blob;
-  width: number;
-  height: number;
+  /**
+   * 出力の寸法。**素通しのときは `null`**（デコードしていないので此方は知らない）。
+   * 素通しの出力は元のバイト列そのもので、寸法は原寸に等しい ⇒ 画面は `info` を読む。
+   * ここに 0 を入れて「0 なら出さない」と各所で書くと、番兵が画面まで漏れる。
+   */
+  width: number | null;
+  height: number | null;
   bytes: number;
   /** 実際の出力形式（正規化済み）。 */
   format: string;
@@ -256,6 +267,16 @@ export function previewKey(s: ConvertState): string {
   return "error" in resolved
     ? `invalid:${path}`
     : `${path}\n${dims}\n${JSON.stringify(resolved.options)}`;
+}
+
+/**
+ * 2 つの `previewKey` が**同じ設定**を指しているか（原寸の区画だけが違うか）。
+ * 鍵は `path \n 原寸 \n 設定` の 3 区画なので、最後だけを見る。
+ */
+function sameOptions(a: string, b: string): boolean {
+  const at = a.indexOf("\n", a.indexOf("\n") + 1);
+  const bt = b.indexOf("\n", b.indexOf("\n") + 1);
+  return at >= 0 && bt >= 0 && a.slice(at) === b.slice(bt);
 }
 
 /** フォームの生値を解決済みの `ConvertOptions` にする。`error` は入力エラー（理由つき）。 */
@@ -370,14 +391,11 @@ export const useConvertStore = create<ConvertState>()(
        */
       loadInfo: async () => {
         const src = get().source;
-        if (!src || get().info || infoGen === sourcesGen) return;
+        if (!src || get().info) return;
         const gen = sourcesGen;
-        infoGen = gen;
         const releaseHold = pool.hold();
         try {
-          const res = (await pool
-            .get()
-            .submit({ op: "info", path: src.path, blob: src.file }, [])) as InfoResult;
+          const res = await fetchInfo(pool.get(), src, gen);
           if (gen !== sourcesGen) return; // 選び直された後に返ってきた結果は捨てる
           set({
             info: {
@@ -392,8 +410,6 @@ export const useConvertStore = create<ConvertState>()(
           // ただし**答えは必ず残す** —— 何も書かずに終わるとプレビューがそこで止まる。
           if (gen === sourcesGen) set({ info: { width: 0, height: 0, bytes: 0 } });
         } finally {
-          // **自分の世代のときだけ降ろす**（上の `infoGen` の説明のとおり）。
-          if (infoGen === gen) infoGen = null;
           releaseHold();
         }
       },
@@ -417,6 +433,15 @@ export const useConvertStore = create<ConvertState>()(
         // mount でも走るので、これが無いと画面を往復するたびに変換 1 回ぶんを丸ごと払う。
         // **誤りの側（`previewError`）では飛ばさない** —— 中断（プール破棄）もそこに記録されるので、
         // 飛ばすと「中断しました」のまま二度と復帰しなくなる。
+        // **原寸が届いて鍵が変わっただけなら、同じ絵を名札だけ付け替えて使い回す。**
+        // 素通しの出力は原寸に依らない（元のバイト列そのもの）ので作り直す意味が無く、
+        // 作り直すと **`Blob` の同一性が変わって `useObjectUrl` が URL を張り替える**
+        // ＝ ブラウザが絵を捨てて再デコードする（4000×3000 で目に見えて瞬く）。
+        const prev = state.preview;
+        if (prev?.passedThrough && prev.path === src.path && sameOptions(prev.key, key)) {
+          set({ preview: { ...prev, key } });
+          return;
+        }
         if (state.preview?.key === key) {
           // 成功した絵と古い理由が同じ鍵で同居し得る（catch は `preview` を消さない）。
           // 作り直さないと決めた以上、ここで理由の方を落とす。
@@ -463,14 +488,13 @@ export const useConvertStore = create<ConvertState>()(
             planned,
           );
           if (gen !== sourcesGen) return; // 選び直された後に返ってきた結果は捨てる
-          // 素通しは寸法を返さない（デコードしていない）ので、取得時の原寸を使う。
-          const info = get().info;
           set({
             preview: {
               path: src.path,
               blob: out.blob,
-              width: out.passedThrough ? (info?.width ?? 0) : out.width,
-              height: out.passedThrough ? (info?.height ?? 0) : out.height,
+              // 素通しは寸法を返さない（デコードしていない）。原寸と同じなので画面が `info` を読む。
+              width: out.passedThrough ? null : out.width,
+              height: out.passedThrough ? null : out.height,
               bytes: out.blob.size,
               format,
               passedThrough: out.passedThrough,

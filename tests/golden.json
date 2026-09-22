@@ -2,7 +2,7 @@
   "_": [
     "SPEC.md §1 が要求する『固定画像 + 既知 dHash』。両端がこの同じ数値を出すことを、",
     "web は apps/website/tests/goldenDecode.test.ts（vp test）、",
-    "CLI は crates/cli/tests/golden.rs（cargo test）が確かめる。",
+    "CLI は crates/cli/src/pipeline.rs の golden_fixtures_match（cargo test）が確かめる。",
     "",
     "**ここが守るのは手順 1〜3（デコード）まで含めた端から端まで**。",
     "crates/wasm の parity（GOLDEN 定数）は合成 RGBA から始まるのでデコーダを 1 つも通らない。",

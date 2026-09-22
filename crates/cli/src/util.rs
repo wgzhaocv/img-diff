@@ -1,7 +1,7 @@
 //! CLI 共通の小ユーティリティ（scan / compare / clean が共有）。
 
 use imgdiff_core::report::{Producer, HASH_ALGO_VERSION};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// 同梱パッケージ（配布 zip）のルートを返す。判定は **`<root>/bin/<exe>` レイアウトかどうか** の一点。
 ///
@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// 先に `canonicalize` する（失敗時は原値で続行＝best-effort）。
 pub fn bundle_root() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    let exe = strip_verbatim(std::fs::canonicalize(&exe).unwrap_or(exe));
+    let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
     let bin = exe.parent()?;
     if bin.file_name()? != "bin" {
         return None;
@@ -23,18 +23,25 @@ pub fn bundle_root() -> Option<PathBuf> {
     Some(bin.parent()?.to_path_buf())
 }
 
-/// Windows の `canonicalize` が返す `\\?\` 前置き（verbatim path）を剥がす。
+/// Windows の `canonicalize` が返す `\\?\C:\…`（verbatim path）を素の `C:\…` に戻す。
+/// **剥がせないときは `None`** —— 呼び出し側は「渡さない」を選べる。
 ///
-/// **この道は `VIPSHOME` として libvips（C）へ渡る。** libvips は `g_build_filename` で
-/// 素直に繋ぐだけなので `\\?\C:\...` を解釈できず、モジュール置き場を見失う
+/// **これは C へ渡す直前でだけ使う。** Rust の `std::fs` にとって verbatim は**得**で
+/// （MAX_PATH も予約名も効かない）、`update` の入れ替えはその上に乗っている。
+/// 困るのは `VIPSHOME` から先 —— libvips は `g_build_filename` で素直に繋ぐだけなので
+/// `\\?\C:\…` を解釈できず、モジュール置き場を見失う
 /// ＝ **HEIC が「未対応の形式」になる**（wine 上で実際にそうなった）。
-/// verbatim でなくなることで長い道の上限（260 文字）が戻るが、
-/// 同梱パッケージの置き場としては現実的な制約ではない。
-fn strip_verbatim(path: PathBuf) -> PathBuf {
-    match path.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
-        Some(rest) => PathBuf::from(rest),
-        None => path,
+///
+/// **UNC（`\\?\UNC\server\share\…`）は剥がさない。** 前置きだけ取ると
+/// `UNC\server\share\…` という**相対パスもどき**になって、かえって壊れる。
+/// 網の上に置かれた場合は `VIPSHOME` を設定しない（libvips は従来どおり argv0 から推定する）。
+pub fn plain_windows_path(path: &Path) -> Option<&str> {
+    let s = path.to_str()?;
+    let rest = s.strip_prefix(r"\\?\")?;
+    if rest.starts_with("UNC\\") {
+        return None;
     }
+    Some(rest)
 }
 
 /// この CLI の Producer（app="cli"・バージョンは本クレート・vips 実体・ハッシュ手順）。
@@ -116,8 +123,8 @@ pub fn now_rfc3339() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_newer, strip_verbatim};
-    use std::path::PathBuf;
+    use super::{is_newer, plain_windows_path};
+    use std::path::Path;
 
     #[test]
     fn newer_only_when_strictly_greater() {
@@ -129,23 +136,21 @@ mod tests {
         assert!(!is_newer("0.1.4", "0.1.5"));
     }
 
-    /// Windows の `canonicalize` が返す `\\?\` 前置きを剥がす。
-    /// **剥がし忘れると HEIC が読めなくなる** —— この道は `VIPSHOME` として libvips（C）へ渡り、
-    /// あちらは verbatim path を解釈できないのでモジュール置き場を見失う（wine で実際に起きた）。
+    /// `VIPSHOME` へ渡せる形か。**渡し方を間違えると HEIC が読めなくなる**（wine で実際に起きた）。
     #[test]
-    fn verbatim_prefix_is_stripped() {
+    fn verbatim_drive_paths_become_plain_and_unc_is_refused() {
         assert_eq!(
-            strip_verbatim(PathBuf::from(r"\\?\C:\imgdiff\bin\imgdiff.exe")),
-            PathBuf::from(r"C:\imgdiff\bin\imgdiff.exe")
+            plain_windows_path(Path::new(r"\\?\C:\imgdiff\bin\imgdiff.exe")),
+            Some(r"C:\imgdiff\bin\imgdiff.exe")
         );
-        // 前置きが無ければそのまま（unix の道は一切触らない）。
+        // 前置きが無ければ渡す必要も無い（unix の道はここへ来ない）。
+        assert_eq!(plain_windows_path(Path::new("/opt/imgdiff/bin/imgdiff")), None);
+        // **UNC は剥がさない** —— 前置きだけ取ると `UNC\server\share\…` という
+        // 相対パスもどきになり、かえって壊れる。網の上なら VIPSHOME を設定しない方が正しい。
         assert_eq!(
-            strip_verbatim(PathBuf::from("/opt/imgdiff/bin/imgdiff")),
-            PathBuf::from("/opt/imgdiff/bin/imgdiff")
+            plain_windows_path(Path::new(r"\\?\UNC\server\share\imgdiff\bin\imgdiff.exe")),
+            None
         );
-        // UNC（`\\?\UNC\server\share`）は**剥がさない** —— 素の `UNC\...` は道として成り立たない。
-        let unc = PathBuf::from(r"\\?\UNC\server\share\imgdiff\bin\imgdiff.exe");
-        assert_eq!(strip_verbatim(unc.clone()), PathBuf::from(r"UNC\server\share\imgdiff\bin\imgdiff.exe"));
     }
 
     #[test]

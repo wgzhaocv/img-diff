@@ -94,6 +94,11 @@ export function ConvertPreview() {
   const shown = preview?.key === key ? preview : null;
   // 失敗の理由も**今の入力に対するもの**だけ出す（設定を変えたら前の理由は消える）。
   const error = failure?.key === key ? failure.message : null;
+  // **素通しの出力寸法は原寸そのもの**（デコードしていないので `preview` は持っていない）。
+  // 原寸がまだ届いていない／読めなかったときは、寸法の区画ごと出さない。
+  const outWidth = shown?.passedThrough ? (before?.width ?? 0) : (shown?.width ?? 0);
+  const outHeight = shown?.passedThrough ? (before?.height ?? 0) : (shown?.height ?? 0);
+  const outDims = outWidth > 0 ? `${outWidth}×${outHeight}` : "";
   // **絵だけは前のものを残す**（暗くして・見出しは「生成中…」）。avif は 1 枚に数秒かかるので、
   // 作り直すたびに枠を空にすると固まったように見える。数字とボタンは `shown` にしか従わないので、
   // 古い結果を保存・コピーできてしまうことは無い。**理由が出たら引っ込める**
@@ -194,9 +199,7 @@ export function ConvertPreview() {
           ) : shown ? (
             <>
               <div className="num text-xs text-muted-foreground">
-                {/* 素通しは原寸の到着を待たないので、寸法だけ少し遅れて出ることがある。
-                    0 を見せるくらいなら、分かるまで寸法の区画ごと出さない。 */}
-                {shown.width > 0 ? `${shown.width}×${shown.height} · ` : ""}
+                {outDims ? `${outDims} · ` : ""}
                 {formatBytes(shown.bytes)} · {shown.format}
               </div>
               {shown.passedThrough ? (
@@ -225,7 +228,7 @@ export function ConvertPreview() {
         onOpenChange={setZoomed}
         name={name}
         url={ready ? savableUrl : null}
-        dims={shown && shown.width > 0 ? `${shown.width}×${shown.height}` : ""}
+        dims={outDims}
         actions={
           <PreviewActions
             ready={ready}

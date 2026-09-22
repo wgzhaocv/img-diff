@@ -3,6 +3,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { getThumb } from "@/lib/db";
 import { useInView } from "@/lib/useInView";
+import { useObjectUrl } from "@/lib/useObjectUrl";
 
 // サムネ表示（透過 PNG は市松背景）。優先度: 渡された thumb Blob（File[] 経路）→ IDB の thumbs
 // （FS Access 経路・権限ゼロでも表示可）→ 原 File（フォールバック）。マウント中だけ URL を保持し解放。
@@ -31,12 +32,13 @@ export function Thumb({
   alt: string;
   className?: string;
 }) {
-  const [url, setUrl] = useState<string | null>(null);
   const { ref, inView } = useInView<HTMLDivElement>();
+  const [blob, setBlob] = useState<Blob | null>(null);
+  // URL の作成と解放は `useObjectUrl` に任せる（他の 3 箇所と同じ道を通す）。
+  const url = useObjectUrl(blob);
 
   useEffect(() => {
     if (!inView) return;
-    let objectUrl: string | null = null;
     let cancelled = false;
 
     async function pickBlob(): Promise<Blob | undefined> {
@@ -48,16 +50,12 @@ export function Thumb({
       return file;
     }
 
-    void pickBlob().then((blob) => {
-      if (cancelled || !blob) return;
-      objectUrl = URL.createObjectURL(blob);
-      setUrl(objectUrl);
+    void pickBlob().then((picked) => {
+      if (!cancelled) setBlob(picked ?? null);
     });
 
     return () => {
       cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-      setUrl(null);
     };
   }, [file, thumb, rootId, path, inView]);
 

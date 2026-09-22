@@ -77,11 +77,8 @@
 
 **未解決として残るもの**:
 
-- SPEC §1 が要求する**固定画像の golden 夹具は依然として未実装**。`crates/wasm` の parity は
-  合成 RGBA から始まるので**デコーダを 1 つも通らない**。今回 `tests/fixtures/sample.heic` と
-  `check-heic-parity.sh` で HEIC だけは塞いだが、jpg/png 等は手動確認のまま。
-- `SCANNABLE_EXTS` と CLI 既定 `--ext` が **`tif` と `svg` でずれている**（web だけが拾う）。
-  `imagePaths.ts` のコメントは「揃える」と言っているので、どちらかに寄せる必要がある。
+- ~~SPEC §1 の固定画像 golden 夹具~~ **2026-09-22 に実装**（`tests/golden.json`・下の節 F）。
+- ~~`SCANNABLE_EXTS` と CLI 既定 `--ext` のずれ~~ **2026-09-22 に解消**（下の節 D）。
 
 ### Codex 性能レビュー（gpt-5.6-sol/high）— 対応済みと残り
 
@@ -119,7 +116,9 @@
 
 **先にやる 4 つ**（収益/コスト順）:
 
-1. **compare を worker へ + 余計なサムネと二重コピーを消す**（上節「残り」の具体化）。
+1. ~~**compare を worker へ + 余計なサムネと二重コピーを消す**~~ —— **2026-09-22 に実施**
+   （下の「高価値の 6 件」節 A。long task 983/571/566ms → 0）。以下は当時の分析で、
+   そのまま実施した内容と一致する。
    - `lib/compare.ts:84` の `compareFiles()` は `yieldToPaint()` で 1 回譲るだけで、
      `compareScores` / `diffHighlight` は**主線程で同期**に走る。
    - `decodeOne()` が使う `workers/hash.worker.ts:46` の `decodeFull()` は
@@ -196,15 +195,15 @@
 
 **そのほか（上の 4 つの後）**:
 
-- `screens/ScanScreen.tsx:44` は store 全体を購読している（progress を分解しなくても再描画が走る）⇒
-  フィールド selector にする。
-- `components/DuplicateGroups.tsx:44` は全メンバを描き、各 `Thumb` が即 `getThumb()` を呼ぶ
-  （`loading="lazy"` はこの IDB 問い合わせを遅らせない）⇒ 仮想化（DESIGN §3 で想定済み）。
+- ~~`screens/ScanScreen.tsx:44` の全店購読~~ / ~~`components/DuplicateGroups.tsx:44` の全メンバ描画~~
+  —— **2026-09-22 に実施**（下の節 E）。ただし**完全な仮想スクロールではない**
+  （`IntersectionObserver` で読みを遅らせ、グループは 30 件ずつ出す）。
+  枚数が万を超えるなら本物の仮想化が要る。
 - `lib/scan.ts:179` は DFS 列挙 → 全 `getFile()` → hash の直列。`walkImages()` と `getRootHashes()`
   は重ねられる。
 - **プール本数は下げない**（上節の実測）。`vips.concurrency(1)` も維持。vips の常駐には 60 秒の
-  遊休回収が既に在る。直せるのは `workers/vips.ts:209` の「サムネ不要の HEIC 早期 return」に残る
-  余計な `getVips()` 呼びの方。
+  遊休回収が既に在る。直せるのは `workers/vips.ts` の「サムネ不要の HEIC 早期 return」に残る
+  余計な `getVips()` 呼びの方（**その早期 return は 2026-09-22 から compare で実際に使われている**）。
 - **O(N²) は union-find ではなく対探索**（`crates/core/src/cluster.rs:99` の `group_perceptual()` /
   `build_group()` が全対比較）⇒ 同一 dHash を先に畳んで、探索を「異なる hash の個数 U」へ落とす。
 
@@ -291,12 +290,145 @@ polar static deploy ./dist --name img-diff`。**今回は上げる前に旧版�
 直すなら**原寸は placeholder として見せ、`form.width` は利用者が打つまで空のまま**にする。
 `resolveOptions` / `previewKey` / 縦横比の錠 / 寸法欄の描画に触るので、UI の意味が変わる別件。
 
+### 高価値の 6 件（compare をワーカーへ / 寸法欄の根本原因 / Windows 交叉編譯 + 小口 3 件）— 済・2026-09-22
+
+`TODO.md` を価値順に並べ直して選んだ 6 件。**数字は全部この巡で実ブラウザ / wine から取った実測**で、
+推測は「推測」と書いてある。
+
+**まず前回の訂正。** 「`prefillDimensions` を直すと実測 4.2s → 8.5s が戻る」と書いたのは**誤り**。
+`apps/website/DESIGN.md:199` のその数字は「**原寸を待たずに始めると**倍になる」という意味で、
+`renderPreview` の早切りは**その 8.5s を防いでいる側**だった。寸法欄の修正それ自体に
+時間の収益は無い —— ただし別の収益が付いてきた（下の B）。
+
+**A — compare の採点と差分をワーカーへ**（`8179248`）
+
+- `compareScores` / `diffHighlight` は主線程で**同期に**走っていた。前後の `yieldToPaint()`
+  （`setTimeout(0)`）は進捗の文字を先に描かせるだけで、固まる時間は 1ms も減らない。
+- **実測（4000×3000 の png 2 枚・long task）: 983 / 571 / 566ms → 0 / 0 / 0。**
+  表示される値は不変（SSIM 0.9634 / PSNR 26.67 / 差分割合 100.00% / ハミング 0 が前後で同一）。
+- `crates/wasm` に `compare_all` を足して束縛層の複製を **240MB → 144MB**（**バイト量からの導出**。
+  時間は測っていない）。呼ぶ core 関数も引数も同じなのでビット一致で、それを試験で固定した。
+- `op:"decode"` は**使いもしないサムネを毎回作っていた**（HEIC では早期 return まで外していた）。
+  `wantThumb` を引数にした。**その早期 return が実際に使われるのは今回が初めて**なので、
+  vips を往復した画素と一致することを試験で固定した（`applyDecode` を同期 seam として切り出し）。
+- 副産物: `/compare` は**主線程の imgdiff-wasm を一度も起こさなくなった**（ハミングもワーカー側）。
+
+**B — 寸法欄の根本原因**（`f2a58bc`）
+
+- `prefillDimensions()` が原寸を「利用者が指定した寸法」と同じ欄へ書いていた。原寸は placeholder で
+  見せ、欄は打つまで空にした。空欄こそが原寸なので「原寸」チップは**両方を空にする**。
+- **ここで初めて素通しが原寸の到着を待たなくなった**（欄が空なら計画は必ず noop ＝ `planned` 無しでも
+  同値に判定できる）。**実測: `sample.heic` 710/684/663ms → 320/313/318ms、
+  4000×3000 の JPEG 728/719ms → 315/319ms。** 残り約 315ms はほぼ入力停止の待ち 300ms そのもの。
+  9-22 に測った「791ms → 804ms ＝ 収益ゼロ」は、この原寸待ちが残っていたから。
+- `convertSource` のプールも遅延にした（素通しならワーカーを 1 本も起こさない）。
+- **`infoGen` と `previewKey` の原寸区画は残した。** 前者は二重 `op:"info"` の無駄が残るため、
+  後者は消すと `info` 到着で鍵が変わらず**プレビューが永久に出なくなる**ため。
+
+**C — Windows 交叉編譯**（`d9d047e`）
+
+- **arm64 の容器**で交叉編譯する（交叉編譯は宿主の架構を問わないので、amd64 にすると
+  Rosetta で遅くなるだけ）。amd64 が要るのは wine で `.exe` を動かす煙試験だけ。
+- **libvips は MSYS2 の mingw64 パッケージ**を依存ごと取って展開する。`TODO` が材料として挙げていた
+  **公式の `vips-dev-x64-all-8.18.6.zip` は使えなかった** —— あちらの libheif には HEVC の復号器が
+  入っておらず（実測: `Support for this compression format has not been built in`）、
+  既に検証済みの MSYS2 製パッケージに対して機能が退行する。AV1/AVIF は読めるので気づきにくい。
+- **実バグを 1 つ見つけた（wine が無ければ見つからなかった）**: `bundle_root()` が返す
+  Windows の `canonicalize` 結果は `\\?\` 付きの verbatim path で、これを `VIPSHOME` として
+  libvips（C）へ渡すと解釈されず、**モジュール置き場を見失って HEIC が「未対応の形式」になる**。
+  `util::strip_verbatim` で剥がす。**これは wine 特有ではなく実機の Windows でも起きる。**
+- 煙試験: 起動 / 名乗りが zip の名前と一致 / **dHash が `tests/golden.json` と一致** /
+  HEVC の HEIC が読める。**dHash は原生 mac・wasm・Windows の三者で同じ値**になった。
+
+**D — `tif` / `svg` の扱いを揃えた**（`49a5f99`）
+
+正本を `packages/schema` の `SCANNABLE_EXTS` に置いた。`tif` は CLI 側へ足し（`parse_exts` は
+別名を畳まないので両方の綴りが要る）、`svg` は scan の集合から外した —— web は resvg、
+CLI は libvips の svgload と**描画器が別**で、dHash が一致する保証が無い。
+変換の入力としては web だけが受ける（`CONVERTIBLE_EXTS` に明示で残す）。
+
+**E — 重複一覧は見えている分だけ読む**（`9cb0b5e`）
+
+`Thumb` はマウントと同時に `getThumb()` を打っていた（`loading="lazy"` は IDB 問い合わせを遅らせない）。
+**実測（240 枚 / 40 グループ / 重複 200・各 2 回）: `createObjectURL` 240 → 6、`<img>` 240 → 6。**
+出る数字は不変。`ScanScreen` の全店購読も欄ごとの selector にした。
+
+**数字を 1 つ取り下げる。** commit の本文には「long task 57ms → 0」と書いたが、**再現しなかった** ——
+後から何度測っても 54〜56ms で、前後で変わらない。最初の「0」は一度きりの当たりだったと見る
+（この 1 本は主線程の `cluster_group` らしく、**この修正とは無関係にどちらの側にも出る**）。
+再現したのは上の 2 つだけなので、記録としてはそちらだけを残す。
+
+**F — jpg/png の golden 夹具**（`eb6ba61`）
+
+SPEC §1 が要求していたのに、あったのは HEIC 1 枚ぶんの shell 台本だけだった。
+`tests/fixtures/` + `tests/golden.json` を CLI（`cargo test`）と web（`vp test`）が**同じ json** で読む。
+**結果: jpg / png / 透過 PNG / EXIF 回転 jpg の 4 枚は両端が同じ dHash を出した**
+（この 4 形式については手順 1〜3 も一致していると初めて機械で言える）。
+HEIC はこの集合に入れない（画素が約 29.9% 違う）。
+併せて試験の `dynamicLibraries` が resvg を外していた食い違いも塞いだ。
+
+**仕上げレビューで直したもの**（`/simplify` 4 エージェント → codex）
+
+4 つの角度（reuse / simplification / efficiency / altitude）で重なった指摘を当てた。
+**自分で書いた誤りが 2 つ見つかった**ので先に挙げる:
+
+- **`strip_verbatim` の注釈と試験が食い違っていた。** 注釈は「UNC は剥がさない」と書いてあるのに、
+  試験は**剥がされる**（`UNC\server\…` という道として成り立たない相対パスになる）ことを
+  固定していた。網の上に置かれた同梱パッケージで `bundle_root()` が相対パスを返し、
+  `update` の入れ替えが別の木を触りに行く。**掛ける場所も 1 段高すぎた** ——
+  困るのは `VIPSHOME` から先だけで、Rust の `std::fs` にとって verbatim は得（MAX_PATH が効かない）。
+  `util::plain_windows_path` に改め、C へ渡す直前（`set_bundled_vipshome`）でだけ使う。
+  UNC は剥がさず **`VIPSHOME` を設定しない**（壊れた道を渡すより、libvips の従来の推定に任せる）。
+- **拡張子の「正本」が正本になっていなかった。** Rust の試験は TS の一覧を読まず、**3 つ目の
+  手書きリテラル**と突き合わせていた ⇒ TS だけ直しても両方緑のまま。
+  `packages/schema/scannable-exts.json` に移し、**Rust は `include_str!` でその json を直接読む**
+  （`tests/golden.json` を両側が読むのと同じ作法）。写し間違いが起こらなくなった。
+
+効いた指摘:
+
+- `compare_all` が**差分の判定を二度なめていた**（`pixel_diff_ratio` と `highlight` が同じ
+  `pixel_differs` を全画素に当てる）。塗りながら数える `diff::highlight_counted` に変え、
+  12MP 1 組で 96MB ぶんの読み直しを消した。値はビット一致（同じ判定・同じ範囲・同じ式）。
+- **`useInView` が再描画のたびに監視器を捨てて作り直していた**（`ref` が毎回別の関数だったため）。
+  要素を state で持つ形にして `ref` の同一性を固定。併せて `GroupCard` を `memo`。
+  **実測: 「もっと見る」1 回で新しく作られる監視器が 60（＝増えた枠のぶんだけ）。**
+  直す前は既に出ている 180 も作り直していた。
+- **素通しのプレビューが、原寸が届いた瞬間に作り直されていた。** 中身は同じでも `Blob` の
+  同一性が変わるので `useObjectUrl` が URL を張り替え、**ブラウザが絵を捨てて再デコードする**
+  （4000×3000 で目に見えて瞬く）。設定が同じなら名札だけ付け替えて使い回す。
+  **実測: 出力の `Blob` は最後まで同一物**（`createObjectURL` に渡る対象が終始同じ）。
+  併せて `PreviewResult.width` の `0` 番兵をやめ（`number | null`）、素通しの寸法は画面が `info` を読む。
+- `loadInfo` の世代変数（`infoGen`）を `dedupeInFlight` に置き換え、6 行の言い訳ごと消した。
+- 試験の wasm-vips 起動を `tests/options.ts` に寄せた。**`heic` と `convertVips` は resvg を
+  外したまま**だったので、svg まわりの差が試験から見えない状態が半分残っていた。
+- ワーカーの振り分けを 7 段の入れ子三項から `switch` へ（`default` で取りこぼしに気づける）。
+- `compare_scores` / `diff_highlight` を JS から見えなくした（出口は `compare_all` ひとつ）。
+- `check_pin` を `scripts/check-release-pins.sh` に括り出し、**Windows 側の発版でも通る**ようにした
+  （今までは mac を発版したときしか効かず、Windows だけ発版すると導入導線が古い tag を指したまま）。
+
+**当てなかった指摘と理由**:
+
+- **`scripts/package-windows.sh` を消す / 共有部品に割る**（2 エージェントが提案）。
+  重複しているのは事実（DLL 閉包の BFS・配置・zip の作法）。**やらない** ——
+  あちらは MSYS2 の実機でしか走らせられず、**此処からは一行も試せない**。
+  実機で通した実績のある経路を、wine の煙試験を根拠に消す / 触るのは筋が違う。
+  交叉編譯で 1 回発版を通したら、そのとき消すのが順序として正しい。
+- **サムネの取得を一覧側へ引き上げる**（`getThumbs(rootId, paths[])` で 1 回の txn にまとめ、
+  `Thumb` を表示専用にする）。DESIGN §3 の意図はまさにそれで、指摘は正しい。
+  ただし scan の結果の配管（`thumbByPath` の合流）に手を入れる話で、**測らずに触る範囲ではない**。
+  下の「まだ塞げていない穴」に残す。
+
 ### まだ塞げていない穴
 
-- **SPEC §1 が要求する固定画像の golden 夹具**は HEIC のぶんだけ（`tests/fixtures/sample.heic` +
-  `scripts/check-heic-parity.sh`）。jpg / png 等は手動確認のまま。
-- `SCANNABLE_EXTS` と CLI 既定 `--ext` が **`tif` と `svg` でずれている**（web だけが拾う）。
-- Windows のクロスビルド（OrbStack 経路）。材料は確認済み:
-  `vips-dev-x64-all-8.18.6.zip`（mac と同じ 8.18.6）+ mingw-w64 + `x86_64-pc-windows-gnu`。
-  検証は Wine（Rosetta で amd64 コンテナ）。これが済むと v0.1.6 を latest へ昇格でき、
-  `imgdiff update` の自己更新が実際に使えるようになる。
+- **リリースがまだ**。Windows 版は交叉編譯で作れるようになった（上の C）が、**上げていない** ——
+  v0.1.6 のタグを打ち、mac と win の zip を上げ、`merge-manifest.sh` で `manifest.json` を束ね、
+  `install.sh` のタグ直指しを `releases/latest/download` へ戻し、`InstallScreen.tsx` を合わせる。
+  そこまでやって初めて `imgdiff update` の自己更新が実際に使える。
+- **サムネの取得が `Thumb` 側にある。** DESIGN §3 は「一覧はメタだけ読み、blob は遅延」と
+  書いているのに、blob を引く責任が葉に在るままで、`useInView` と分割表示はその上に乗る近似。
+  本筋は `getThumbs(rootId, paths[])` で 1 回の txn にまとめて一覧側が配ること
+  （FS Access 経路と `File[]` 経路の食い違いも同時に消える）。
+- **`scripts/package-windows.sh`（MSYS2 実機用）と `package-windows-cross.sh` が重複している。**
+  交叉編譯で 1 回発版を通したら、前者を消すのが順序として正しい。
+- **`tests/golden.json` に HEIC は入っていない**（両端で画素が約 29.9% 違うので一致を一般には
+  主張できない）。HEIC は今も `scripts/check-heic-parity.sh` がその 1 枚を確かめるだけ。

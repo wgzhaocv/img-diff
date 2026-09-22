@@ -11,14 +11,28 @@ use indicatif::{ProgressBar, ProgressStyle};
 use rayon::iter::Either;
 use rayon::prelude::*;
 use std::collections::HashMap;
+use std::sync::OnceLock;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-/// **scan / find / clean の既定 `--ext`。**
-/// 正本は `packages/schema/src/index.ts` の `SCANNABLE_EXTS` で、web の scan と**同じ集合**でなければ
-/// ならない（片方だけが拾う画像が在ると同じフォルダで違う結果が出る＝SPEC §1 の parity が崩れる）。
-/// Rust から TS は読めないので、下の試験が「この文字列を解析した結果」を正本の写しと突き合わせる。
-pub const DEFAULT_EXT: &str = "jpg,jpeg,png,webp,gif,bmp,tif,tiff,heic,heif,avif";
+/// **scan / find / clean の既定 `--ext`。正本は `packages/schema/scannable-exts.json`。**
+///
+/// web の scan と**同じ集合**でなければならない —— 片方だけが拾う画像が在ると、同じフォルダに
+/// 対して両者が違う結果を出す（SPEC §1 の parity が崩れる）。**その json をここで直接読む**ので、
+/// 写し間違いという事故が起こらない（`tests/golden.json` を両方の試験が読むのと同じ作法）。
+pub fn default_ext() -> &'static str {
+    static EXTS: OnceLock<String> = OnceLock::new();
+    EXTS.get_or_init(|| {
+        // `include_str!` なので**編譯時に埋まる**（実行時にファイルを探しに行かない）。
+        let raw = include_str!("../../../packages/schema/scannable-exts.json");
+        let doc: serde_json::Value = serde_json::from_str(raw).expect("scannable-exts.json");
+        let exts = doc["exts"].as_array().expect("scannable-exts.json の exts");
+        exts.iter()
+            .map(|v| v.as_str().expect("exts の要素は文字列"))
+            .collect::<Vec<_>>()
+            .join(",")
+    })
+}
 
 /// カンマ区切りの拡張子文字列を、小文字・ドット無しの一覧へ正規化する。
 /// `index_folder` の拡張子マッチ（小文字比較）と対を成すため、パースはここに置く。
@@ -318,18 +332,22 @@ mod tests {
             .code
     }
 
-    /// 既定 `--ext` が web の `SCANNABLE_EXTS`（`packages/schema/src/index.ts`）と同じ集合であること。
-    /// **`tif` と `tiff` は両方要る** —— `parse_exts` は別名を畳まないので、片方しか無いと
-    /// その綴りのファイルを取りこぼす。**`svg` は入れない** —— web は resvg、CLI は libvips の
-    /// svgload と描画器が別で、dHash が一致する保証が無い。
+    /// 既定 `--ext` は正本（`packages/schema/scannable-exts.json`）そのものから作られる。
+    /// ここで見るのは**中身の約束**の方:
+    /// **`tif` と `tiff` は両方要る**（どちらの側も別名を畳まないので、片方しか無いと
+    /// その綴りのファイルを取りこぼす）。**`svg` は入れない**（web は resvg、CLI は libvips の
+    /// svgload と描画器が別で、dHash が一致する保証が無い）。
     #[test]
-    fn default_ext_matches_schema() {
-        assert_eq!(
-            parse_exts(DEFAULT_EXT),
-            [
-                "jpg", "jpeg", "png", "webp", "gif", "bmp", "tif", "tiff", "heic", "heif", "avif"
-            ]
-        );
+    fn default_ext_comes_from_the_shared_list() {
+        let exts = parse_exts(default_ext());
+        assert!(exts.contains(&"tif".to_string()) && exts.contains(&"tiff".to_string()));
+        assert!(!exts.contains(&"svg".to_string()));
+        // 小文字・ドット無し・重複無し（`index_folder` の比較がそれを前提にしている）。
+        assert!(exts.iter().all(|e| *e == e.to_lowercase() && !e.starts_with('.')));
+        let mut sorted = exts.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), exts.len());
     }
 
     /// 打ち間違えたパスが「0 件でした」という**成功に見える答え**にならないこと。

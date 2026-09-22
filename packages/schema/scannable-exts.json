@@ -1,0 +1,17 @@
+{
+  "_": [
+    "scan が拾う拡張子（小文字・ドット無し）。**web と CLI がここを共有する。**",
+    "",
+    "片方だけが拾う画像が在ると、同じフォルダに対して両者が違う結果を出す（SPEC §1 の parity）。",
+    "TS は src/index.ts が import し、Rust は crates/cli/src/index.rs が include_str! で読む",
+    "—— 中身をこの 1 ファイルに置くのは、tests/golden.json と同じ理由（両方の試験の枠組みから",
+    "同じファイルを読めるなら、ずれは機械が見つける）。",
+    "",
+    "**tif と tiff は両方載せる** —— どちらの側も別名を畳まないので、片方しか書かないと",
+    "その綴りのファイルを取りこぼす。",
+    "**svg は入れない** —— web は resvg、CLI は libvips の svgload と別の描画器なので、",
+    "dHash が一致する保証が無い（SPEC §5.4 の形式表にも svg は無い）。",
+    "変換の入力としては web だけが受ける（CONVERTIBLE_EXTS）。"
+  ],
+  "exts": ["jpg", "jpeg", "png", "webp", "gif", "bmp", "tif", "tiff", "heic", "heif", "avif"]
+}

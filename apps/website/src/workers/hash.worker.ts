@@ -250,33 +250,42 @@ function transfersOf(res: WorkerResponse): Transferable[] {
   return t;
 }
 
+/// op ごとの振り分け。**未知の op を黙って hash として扱わない**
+/// （増やしたのに配線し忘れたことに気づけるように）。`switch` にしてあるのは
+/// `default` で TS が「取りこぼした op」を教えてくれるから。
+async function handle(req: WorkerRequest): Promise<WorkerResponse> {
+  switch (req.op) {
+    case "warm":
+      return warmOne();
+    case "convert":
+      return convertOne(req);
+    case "info":
+      return infoOne(req);
+    case "pixel":
+      return pixelOne(req);
+    case "score":
+      return scoreOne(req);
+    case "decode":
+      return decodeOne(req);
+    case "hash":
+      return hashOne(req);
+    default: {
+      const unknown = req as { op: string; path?: string };
+      return {
+        op: "hash",
+        path: unknown.path ?? "",
+        sha256: "",
+        phash: null,
+        width: 0,
+        height: 0,
+        bytes: 0,
+        error: `未知の op: ${String(unknown.op)}`,
+      } satisfies HashResult;
+    }
+  }
+}
+
 self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
-  const req = ev.data;
-  // 未知の op を黙って hash として扱わない（増やしたのに配線し忘れたことに気づけるように）。
-  const res =
-    req.op === "warm"
-      ? await warmOne()
-      : req.op === "convert"
-        ? await convertOne(req)
-        : req.op === "info"
-          ? await infoOne(req)
-          : req.op === "pixel"
-            ? await pixelOne(req)
-            : req.op === "score"
-              ? await scoreOne(req)
-              : req.op === "decode"
-                ? await decodeOne(req)
-                : req.op === "hash"
-                  ? await hashOne(req)
-                  : ({
-                      op: "hash",
-                      path: (req as { path: string }).path,
-                      sha256: "",
-                      phash: null,
-                      width: 0,
-                      height: 0,
-                      bytes: 0,
-                      error: `未知の op: ${String((req as { op: string }).op)}`,
-                    } satisfies HashResult);
+  const res = await handle(ev.data);
   self.postMessage(res, transfersOf(res));
 };

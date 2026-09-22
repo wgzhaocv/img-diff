@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import { CheckCircle2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,9 +12,11 @@ import { STRICTNESS_LABEL, type DupGroup, type ImageRecord } from "@/lib/core";
 import { useScanStore } from "@/lib/stores/scanStore";
 
 /**
- * 一度に描くグループ数。**数字の出所は「一画面に入る量の数倍」** ——
- * 全部描くと、重複の多いフォルダでは `<figure>` が画像の枚数ぶん出来て、
- * それぞれがサムネの読み込みを抱える（数千枚のフォルダで数千件）。
+ * 一度に描くグループ数。**数字の出所は「一画面に入る量の数倍」**。
+ *
+ * **サムネの読み込みを止めるのはこれではない**（それは `Thumb` の `useInView`）。
+ * ここが効くのは DOM の節点数そのもの —— 重複の多いフォルダでは `<figure>` が画像の枚数ぶん
+ * 出来て、React の突き合わせも滾動の手応えもそこに引っ張られる。
  * 削除ダイアログの下見も同じ理由で 100 件で切っている（`DeleteDuplicatesButton`）。
  */
 const GROUP_PAGE = 30;
@@ -99,7 +101,12 @@ function Stat({
   );
 }
 
-function GroupCard({
+/**
+ * **memo する。** 「もっと見る」を押すと親が描き直されるが、既に出ているカードの入力
+ * （`group` / `imageByPath` / `fileByPath` / `rootId`）は変わらない。memo が無いと
+ * ぶら下がる `Thumb` まで全部描き直され、まだ見えていない枠の監視器まで作り直しになる。
+ */
+const GroupCard = memo(function GroupCard({
   group,
   imageByPath,
   fileByPath,
@@ -171,4 +178,4 @@ function GroupCard({
       </div>
     </Card>
   );
-}
+});

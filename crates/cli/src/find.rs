@@ -26,7 +26,7 @@ pub struct FindArgs {
     #[arg(long, default_value_t = true)]
     recurse: bool,
     /// カンマ区切りの対象拡張子
-    #[arg(long, default_value = index::DEFAULT_EXT)]
+    #[arg(long, default_value = index::default_ext())]
     ext: String,
     /// 上位 N 件だけ返す（層順→距離昇順で上位。省略時は全件）
     #[arg(long)]

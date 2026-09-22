@@ -10,11 +10,23 @@ use crate::{compare, preprocess};
 /// これにより品紅ピクセル数 = `pixel_diff_ratio · 総px` が厳密に成り立つ。
 /// 返り値長は min(a,b) の画素数 ×4（安全側に短い方で評価）。
 pub fn highlight(a: &[u8], b: &[u8], tolerance: u8) -> Vec<u8> {
+    highlight_counted(a, b, tolerance).0
+}
+
+/// `highlight` と同じ画像に加えて、**品紅に塗った画素の数**も返す。
+///
+/// 上のコメントのとおり「品紅ピクセル数 = `pixel_diff_ratio` × 総画素数」が厳密に成り立つので、
+/// 塗りながら数えれば `compare::pixel_diff_ratio` を**もう一度全画素なめ直す必要が無い**
+/// （12MP 1 組で 96MB ぶんの読み直し）。判定は同じ `pixel_differs`・範囲も同じ
+/// `min(a,b)/4` なので、**値はビット一致**する。
+pub fn highlight_counted(a: &[u8], b: &[u8], tolerance: u8) -> (Vec<u8>, usize) {
     let pixels = a.len().min(b.len()) / 4;
     let mut out = Vec::with_capacity(pixels * 4);
+    let mut differing = 0usize;
     for p in 0..pixels {
         let i = p * 4;
         if compare::pixel_differs(a, b, i, tolerance) {
+            differing += 1;
             out.extend_from_slice(&[255, 0, 255, 255]); // 品紅（差分）
         } else {
             // ベースは A の Rec.601 グレー（式は preprocess と単一ソース）を白側へ淡化:
@@ -24,7 +36,17 @@ pub fn highlight(a: &[u8], b: &[u8], tolerance: u8) -> Vec<u8> {
             out.extend_from_slice(&[faded, faded, faded, 255]);
         }
     }
-    out
+    (out, differing)
+}
+
+/// 差分画素数から `pixel_diff_ratio` を作る。**`compare::pixel_diff_ratio` と同じ式**
+/// （0 画素なら 0.0）。数え方を 2 箇所に書かないためにここへ置く。
+pub fn ratio_from_count(differing: usize, a: &[u8], b: &[u8]) -> f64 {
+    let pixels = a.len().min(b.len()) / 4;
+    if pixels == 0 {
+        return 0.0;
+    }
+    differing as f64 / pixels as f64
 }
 
 #[cfg(test)]

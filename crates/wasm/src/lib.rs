@@ -49,33 +49,22 @@ pub fn hamming_hex(a: &str, b: &str) -> Option<u32> {
 /// `pixel_equal` と `hamming_distance` はここに含めない: 前者は JS が pixelSha256
 /// （両画像の crypto.subtle）の一致で、後者は `hamming_hex` で導出する（いずれも CLI
 /// `compare.rs`（pixel_sha256 一致 / hash::hamming）と同じ意味に揃える）。
-#[wasm_bindgen]
-pub struct CompareScores {
+///
+/// **JS へは出さない**（出口は `compare_all` ひとつ）。分けて呼べる形を残しておくのは
+/// `compare_all` が正しいことを試験で突き合わせるため。
+struct CompareScores {
     pixel_diff_ratio: f64,
     ssim: f64,
     psnr: f64,
 }
 
-#[wasm_bindgen]
-impl CompareScores {
-    #[wasm_bindgen(getter)]
-    pub fn pixel_diff_ratio(&self) -> f64 {
-        self.pixel_diff_ratio
-    }
-    #[wasm_bindgen(getter)]
-    pub fn ssim(&self) -> f64 {
-        self.ssim
-    }
-    #[wasm_bindgen(getter)]
-    pub fn psnr(&self) -> f64 {
-        self.psnr
-    }
-}
-
-/// 白平坦化済み・同寸法の RGBA 2 枚から連続値スコアをまとめて計算する（境界越えを 1 回に集約）。
+/// 白平坦化済み・同寸法の RGBA 2 枚から連続値スコアをまとめて計算する。
 /// SSIM は内部で Rec.601 グレー化してから計算する。SPEC §3。
-#[wasm_bindgen]
-pub fn compare_scores(a: &[u8], b: &[u8], width: u32, height: u32, tolerance: u8) -> CompareScores {
+///
+/// **今の出口は `compare_all` だけ**なので、ここを直に呼ぶのは「まとめた側が正しいか」を
+/// 突き合わせる試験だけ。素朴な実装を残しておくこと自体がその試験の価値。
+#[cfg(test)]
+fn compare_scores(a: &[u8], b: &[u8], width: u32, height: u32, tolerance: u8) -> CompareScores {
     let ga = preprocess::to_gray_rec601(a);
     let gb = preprocess::to_gray_rec601(b);
     CompareScores {
@@ -85,20 +74,16 @@ pub fn compare_scores(a: &[u8], b: &[u8], width: u32, height: u32, tolerance: u8
     }
 }
 
-/// 白平坦化済み・同寸法の RGBA 2 枚から差分ハイライト RGBA を返す（SPEC §4）。
-/// 品紅=差分・淡グレー=ベース。可視化専用。
-#[wasm_bindgen]
-pub fn diff_highlight(a: &[u8], b: &[u8], tolerance: u8) -> Vec<u8> {
-    diff::highlight(a, b, tolerance)
-}
-
-/// スコアと差分ハイライトを**同じ 1 回の受け渡しで**返す（SPEC §3 + §4）。
+/// スコアと差分ハイライトを**同じ 1 回の受け渡しで**返す（SPEC §3 + §4）。**compare の唯一の出口。**
 ///
-/// `compare_scores` と `diff_highlight` を別々に呼ぶと a/b が**二度ずつ**線形メモリへ複製される
-/// （12MP 1 組で入り 4 枚ぶん + 出し 1 枚ぶん ≒ 240MB）。こちらは入り 2 枚ぶん + 出し 1 枚ぶん
-/// （≒ 144MB）で済む。**呼ぶ core の関数も引数も順序も同じなのでビット一致**
-/// （どちらも純関数なので、分けて呼ぼうがまとめようが答えは変わらない）。
-/// 旧 2 つは退路として残してある。
+/// 分けて呼ぶと 2 つ無駄が出る:
+///   1. a/b が**二度ずつ**線形メモリへ複製される（12MP 1 組で入り 4 枚ぶん + 出し 1 枚ぶん ≒ 240MB）。
+///      まとめれば入り 2 枚ぶん + 出し 1 枚ぶん ≒ 144MB。
+///   2. **差分の判定を二度なめる** —— `pixel_diff_ratio` と `highlight` は同じ `pixel_differs` を
+///      全画素に当てる。塗りながら数えれば 1 回で済む（`diff::highlight_counted`）。
+///
+/// **値はビット一致**: 判定も範囲も同じで、`pixel_diff_ratio` は同じ式で数から作る
+/// （`compare_all_matches_the_two_separate_calls` が固定している）。
 #[wasm_bindgen]
 pub struct CompareAll {
     scores: CompareScores,
@@ -126,12 +111,20 @@ impl CompareAll {
     }
 }
 
-/// 上の `CompareAll` を作る。中身は `compare_scores` + `diff_highlight` と同じ呼び出し。
+/// 上の `CompareAll` を作る。
 #[wasm_bindgen]
 pub fn compare_all(a: &[u8], b: &[u8], width: u32, height: u32, tolerance: u8) -> CompareAll {
+    let (diff, differing) = diff::highlight_counted(a, b, tolerance);
+    let ga = preprocess::to_gray_rec601(a);
+    let gb = preprocess::to_gray_rec601(b);
     CompareAll {
-        scores: compare_scores(a, b, width, height, tolerance),
-        diff: diff::highlight(a, b, tolerance),
+        scores: CompareScores {
+            // **数え直さない**（上の説明のとおり、塗るときに数えた値をそのまま使う）。
+            pixel_diff_ratio: diff::ratio_from_count(differing, a, b),
+            ssim: compare::ssim(&ga, &gb, width, height),
+            psnr: compare::psnr(a, b),
+        },
+        diff,
     }
 }
 
@@ -370,15 +363,15 @@ mod native_tests {
     fn compare_all_matches_the_two_separate_calls() {
         for (name, a, b, w, h) in compare_pairs() {
             let separate = compare_scores(&a, &b, w, h, 0);
-            let highlight = diff_highlight(&a, &b, 0);
+            let highlight = diff::highlight(&a, &b, 0);
             let mut all = compare_all(&a, &b, w, h, 0);
             assert_eq!(
                 all.pixel_diff_ratio().to_bits(),
-                separate.pixel_diff_ratio().to_bits(),
+                separate.pixel_diff_ratio.to_bits(),
                 "{name}: pixel_diff_ratio"
             );
-            assert_eq!(all.ssim().to_bits(), separate.ssim().to_bits(), "{name}: ssim");
-            assert_eq!(all.psnr().to_bits(), separate.psnr().to_bits(), "{name}: psnr");
+            assert_eq!(all.ssim().to_bits(), separate.ssim.to_bits(), "{name}: ssim");
+            assert_eq!(all.psnr().to_bits(), separate.psnr.to_bits(), "{name}: psnr");
             assert_eq!(all.take_diff(), highlight, "{name}: diff");
             // 取り出したあとは空（二度渡さない）。
             assert!(all.take_diff().is_empty(), "{name}: take_diff は 1 回だけ");

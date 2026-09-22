@@ -36,6 +36,10 @@ VERSION="$(cargo metadata --no-deps --format-version 1 |
   python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')"
 echo "=== packaging imgdiff $VERSION ($TARGET) ===" >&2
 
+# web の導入導線が別の tag を指したまま発版すると、install.sh は**無言で古い版を配り続ける**。
+# mac 版と同じ関門をここでも通す（片方の platform だけ発版することが在り得るので）。
+bash scripts/check-release-pins.sh "$VERSION"
+
 OUT="target/win-package"
 BUNDLE="$OUT/imgdiff"
 rm -rf "$OUT"

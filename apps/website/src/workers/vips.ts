@@ -4,6 +4,7 @@
 
 import type { ConvertOptions } from "schema";
 import { decodeHeicToRgba, isAv1Heif, needsHeicDecoder } from "./heic";
+import { VIPS_DYNAMIC_LIBRARIES } from "./vipsLibs";
 import {
   BG_AVERAGE,
   BG_TRANSPARENT,
@@ -80,19 +81,6 @@ type VipsFactory = (config?: Record<string, unknown>) => Promise<Vips>;
 let vipsPromise: Promise<Vips> | null = null;
 
 /// wasm-vips を（ワーカーごとに）一度だけ初期化して使い回す。
-/**
- * **wasm-vips が起動時に読み込む動的ライブラリ。ここが正本。**
- * `vite.config.ts` の `copyWasmVips` は**この一覧に `vips.wasm` と `vips-es6.js` を足した物**を
- * `public/vips` へ配る（片方だけ足すと実行時に 404 する）。試験も同じ一覧を使う
- * —— 以前は試験だけ resvg を外していて、本番でしか起きない差が試験から見えなかった。
- *
- * **init 時に全部読み込まれる**（emscripten の loadDylibs は遅延しない）。実測で
- * jxl の追加は +2.6ms / +7MB per worker、冷起動のバイト数は 9.27 → 11.34MB。
- * HEIC/AVIF は libheif、SVG は resvg、JXL は convert の入出力で使う
- * （JXL は CLI の Windows 版が libjxl 非同梱なので web のみ・SPEC §5.4）。
- */
-export const VIPS_DYNAMIC_LIBRARIES = ["vips-heif.wasm", "vips-resvg.wasm", "vips-jxl.wasm"];
-
 export function getVips(): Promise<Vips> {
   if (!vipsPromise) {
     vipsPromise = (async () => {

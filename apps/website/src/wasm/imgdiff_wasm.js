@@ -1,13 +1,16 @@
 /* @ts-self-types="./imgdiff_wasm.d.ts" */
 
 /**
- * スコアと差分ハイライトを**同じ 1 回の受け渡しで**返す（SPEC §3 + §4）。
+ * スコアと差分ハイライトを**同じ 1 回の受け渡しで**返す（SPEC §3 + §4）。**compare の唯一の出口。**
  *
- * `compare_scores` と `diff_highlight` を別々に呼ぶと a/b が**二度ずつ**線形メモリへ複製される
- * （12MP 1 組で入り 4 枚ぶん + 出し 1 枚ぶん ≒ 240MB）。こちらは入り 2 枚ぶん + 出し 1 枚ぶん
- * （≒ 144MB）で済む。**呼ぶ core の関数も引数も順序も同じなのでビット一致**
- * （どちらも純関数なので、分けて呼ぼうがまとめようが答えは変わらない）。
- * 旧 2 つは退路として残してある。
+ * 分けて呼ぶと 2 つ無駄が出る:
+ *   1. a/b が**二度ずつ**線形メモリへ複製される（12MP 1 組で入り 4 枚ぶん + 出し 1 枚ぶん ≒ 240MB）。
+ *      まとめれば入り 2 枚ぶん + 出し 1 枚ぶん ≒ 144MB。
+ *   2. **差分の判定を二度なめる** —— `pixel_diff_ratio` と `highlight` は同じ `pixel_differs` を
+ *      全画素に当てる。塗りながら数えれば 1 回で済む（`diff::highlight_counted`）。
+ *
+ * **値はビット一致**: 判定も範囲も同じで、`pixel_diff_ratio` は同じ式で数から作る
+ * （`compare_all_matches_the_two_separate_calls` が固定している）。
  */
 export class CompareAll {
     static __wrap(ptr) {
@@ -62,53 +65,6 @@ export class CompareAll {
 if (Symbol.dispose) CompareAll.prototype[Symbol.dispose] = CompareAll.prototype.free;
 
 /**
- * compare の連続値スコア（SPEC §3）。比較不能（寸法不一致）時は呼ばない前提。
- * `pixel_equal` と `hamming_distance` はここに含めない: 前者は JS が pixelSha256
- * （両画像の crypto.subtle）の一致で、後者は `hamming_hex` で導出する（いずれも CLI
- * `compare.rs`（pixel_sha256 一致 / hash::hamming）と同じ意味に揃える）。
- */
-export class CompareScores {
-    static __wrap(ptr) {
-        const obj = Object.create(CompareScores.prototype);
-        obj.__wbg_ptr = ptr;
-        CompareScoresFinalization.register(obj, obj.__wbg_ptr, obj);
-        return obj;
-    }
-    __destroy_into_raw() {
-        const ptr = this.__wbg_ptr;
-        this.__wbg_ptr = 0;
-        CompareScoresFinalization.unregister(this);
-        return ptr;
-    }
-    free() {
-        const ptr = this.__destroy_into_raw();
-        wasm.__wbg_comparescores_free(ptr, 0);
-    }
-    /**
-     * @returns {number}
-     */
-    get pixel_diff_ratio() {
-        const ret = wasm.comparescores_pixel_diff_ratio(this.__wbg_ptr);
-        return ret;
-    }
-    /**
-     * @returns {number}
-     */
-    get psnr() {
-        const ret = wasm.comparescores_psnr(this.__wbg_ptr);
-        return ret;
-    }
-    /**
-     * @returns {number}
-     */
-    get ssim() {
-        const ret = wasm.comparescores_ssim(this.__wbg_ptr);
-        return ret;
-    }
-}
-if (Symbol.dispose) CompareScores.prototype[Symbol.dispose] = CompareScores.prototype.free;
-
-/**
  * 索引済み画像（`ImageRecord[]`）を厳密度でグループ化し `DupGroup[]` を返す。SPEC §5。
  * `strictness` は "exact" | "pixel" | "perceptual"。`threshold` は perceptual のみ有効（None で既定 10）。
  * @param {any} images
@@ -127,7 +83,7 @@ export function cluster_group(images, strictness, threshold) {
 }
 
 /**
- * 上の `CompareAll` を作る。中身は `compare_scores` + `diff_highlight` と同じ呼び出し。
+ * 上の `CompareAll` を作る。
  * @param {Uint8Array} a
  * @param {Uint8Array} b
  * @param {number} width
@@ -142,25 +98,6 @@ export function compare_all(a, b, width, height, tolerance) {
     const len1 = WASM_VECTOR_LEN;
     const ret = wasm.compare_all(ptr0, len0, ptr1, len1, width, height, tolerance);
     return CompareAll.__wrap(ret);
-}
-
-/**
- * 白平坦化済み・同寸法の RGBA 2 枚から連続値スコアをまとめて計算する（境界越えを 1 回に集約）。
- * SSIM は内部で Rec.601 グレー化してから計算する。SPEC §3。
- * @param {Uint8Array} a
- * @param {Uint8Array} b
- * @param {number} width
- * @param {number} height
- * @param {number} tolerance
- * @returns {CompareScores}
- */
-export function compare_scores(a, b, width, height, tolerance) {
-    const ptr0 = passArray8ToWasm0(a, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ptr1 = passArray8ToWasm0(b, wasm.__wbindgen_malloc);
-    const len1 = WASM_VECTOR_LEN;
-    const ret = wasm.compare_scores(ptr0, len0, ptr1, len1, width, height, tolerance);
-    return CompareScores.__wrap(ret);
 }
 
 /**
@@ -183,25 +120,6 @@ export function dhash_hex(rgba, width, height) {
     } finally {
         wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
     }
-}
-
-/**
- * 白平坦化済み・同寸法の RGBA 2 枚から差分ハイライト RGBA を返す（SPEC §4）。
- * 品紅=差分・淡グレー=ベース。可視化専用。
- * @param {Uint8Array} a
- * @param {Uint8Array} b
- * @param {number} tolerance
- * @returns {Uint8Array}
- */
-export function diff_highlight(a, b, tolerance) {
-    const ptr0 = passArray8ToWasm0(a, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ptr1 = passArray8ToWasm0(b, wasm.__wbindgen_malloc);
-    const len1 = WASM_VECTOR_LEN;
-    const ret = wasm.diff_highlight(ptr0, len0, ptr1, len1, tolerance);
-    var v3 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v3;
 }
 
 /**
@@ -491,9 +409,6 @@ function __wbg_get_imports() {
 const CompareAllFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_compareall_free(ptr, 1));
-const CompareScoresFinalization = (typeof FinalizationRegistry === 'undefined')
-    ? { register: () => {}, unregister: () => {} }
-    : new FinalizationRegistry(ptr => wasm.__wbg_comparescores_free(ptr, 1));
 
 function addToExternrefTable0(obj) {
     const idx = wasm.__externref_table_alloc();

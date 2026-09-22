@@ -2,13 +2,16 @@
 /* eslint-disable */
 
 /**
- * スコアと差分ハイライトを**同じ 1 回の受け渡しで**返す（SPEC §3 + §4）。
+ * スコアと差分ハイライトを**同じ 1 回の受け渡しで**返す（SPEC §3 + §4）。**compare の唯一の出口。**
  *
- * `compare_scores` と `diff_highlight` を別々に呼ぶと a/b が**二度ずつ**線形メモリへ複製される
- * （12MP 1 組で入り 4 枚ぶん + 出し 1 枚ぶん ≒ 240MB）。こちらは入り 2 枚ぶん + 出し 1 枚ぶん
- * （≒ 144MB）で済む。**呼ぶ core の関数も引数も順序も同じなのでビット一致**
- * （どちらも純関数なので、分けて呼ぼうがまとめようが答えは変わらない）。
- * 旧 2 つは退路として残してある。
+ * 分けて呼ぶと 2 つ無駄が出る:
+ *   1. a/b が**二度ずつ**線形メモリへ複製される（12MP 1 組で入り 4 枚ぶん + 出し 1 枚ぶん ≒ 240MB）。
+ *      まとめれば入り 2 枚ぶん + 出し 1 枚ぶん ≒ 144MB。
+ *   2. **差分の判定を二度なめる** —— `pixel_diff_ratio` と `highlight` は同じ `pixel_differs` を
+ *      全画素に当てる。塗りながら数えれば 1 回で済む（`diff::highlight_counted`）。
+ *
+ * **値はビット一致**: 判定も範囲も同じで、`pixel_diff_ratio` は同じ式で数から作る
+ * （`compare_all_matches_the_two_separate_calls` が固定している）。
  */
 export class CompareAll {
     private constructor();
@@ -25,47 +28,20 @@ export class CompareAll {
 }
 
 /**
- * compare の連続値スコア（SPEC §3）。比較不能（寸法不一致）時は呼ばない前提。
- * `pixel_equal` と `hamming_distance` はここに含めない: 前者は JS が pixelSha256
- * （両画像の crypto.subtle）の一致で、後者は `hamming_hex` で導出する（いずれも CLI
- * `compare.rs`（pixel_sha256 一致 / hash::hamming）と同じ意味に揃える）。
- */
-export class CompareScores {
-    private constructor();
-    free(): void;
-    [Symbol.dispose](): void;
-    readonly pixel_diff_ratio: number;
-    readonly psnr: number;
-    readonly ssim: number;
-}
-
-/**
  * 索引済み画像（`ImageRecord[]`）を厳密度でグループ化し `DupGroup[]` を返す。SPEC §5。
  * `strictness` は "exact" | "pixel" | "perceptual"。`threshold` は perceptual のみ有効（None で既定 10）。
  */
 export function cluster_group(images: any, strictness: string, threshold?: number | null): any;
 
 /**
- * 上の `CompareAll` を作る。中身は `compare_scores` + `diff_highlight` と同じ呼び出し。
+ * 上の `CompareAll` を作る。
  */
 export function compare_all(a: Uint8Array, b: Uint8Array, width: number, height: number, tolerance: number): CompareAll;
-
-/**
- * 白平坦化済み・同寸法の RGBA 2 枚から連続値スコアをまとめて計算する（境界越えを 1 回に集約）。
- * SSIM は内部で Rec.601 グレー化してから計算する。SPEC §3。
- */
-export function compare_scores(a: Uint8Array, b: Uint8Array, width: number, height: number, tolerance: number): CompareScores;
 
 /**
  * 白平坦化済み RGBA から 9x8 dHash（16進16文字）を計算する。SPEC §1 手順 5〜8。
  */
 export function dhash_hex(rgba: Uint8Array, width: number, height: number): string;
-
-/**
- * 白平坦化済み・同寸法の RGBA 2 枚から差分ハイライト RGBA を返す（SPEC §4）。
- * 品紅=差分・淡グレー=ベース。可視化専用。
- */
-export function diff_highlight(a: Uint8Array, b: Uint8Array, tolerance: number): Uint8Array;
 
 /**
  * wasm-vips がデコードした RGBA（sRGB・autorotate 済）を**その場で白平坦化**し、
@@ -93,22 +69,16 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_compareall_free: (a: number, b: number) => void;
-    readonly __wbg_comparescores_free: (a: number, b: number) => void;
     readonly cluster_group: (a: any, b: number, c: number, d: number) => [number, number, number];
     readonly compare_all: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
-    readonly compare_scores: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly compareall_pixel_diff_ratio: (a: number) => number;
     readonly compareall_psnr: (a: number) => number;
     readonly compareall_ssim: (a: number) => number;
     readonly compareall_take_diff: (a: number) => [number, number];
     readonly dhash_hex: (a: number, b: number, c: number, d: number) => [number, number];
-    readonly diff_highlight: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly flatten_and_dhash: (a: number, b: number, c: any, d: number, e: number) => [number, number];
     readonly flatten_on_white: (a: number, b: number, c: any) => void;
     readonly hamming_hex: (a: number, b: number, c: number, d: number) => number;
-    readonly comparescores_pixel_diff_ratio: (a: number) => number;
-    readonly comparescores_psnr: (a: number) => number;
-    readonly comparescores_ssim: (a: number) => number;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;

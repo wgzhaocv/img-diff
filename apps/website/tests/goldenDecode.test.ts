@@ -2,8 +2,9 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { beforeAll, expect, it } from "vite-plus/test";
-import init, { flatten_and_dhash } from "@/wasm/imgdiff_wasm";
-import { applyDecode, VIPS_DYNAMIC_LIBRARIES, type Vips } from "@/workers/vips";
+import { flatten_and_dhash } from "@/wasm/imgdiff_wasm";
+import { applyDecode, type Vips } from "@/workers/vips";
+import { bootCore, bootVips } from "./options";
 
 // SPEC §1 が要求する「固定画像 + 既知 dHash」の web 側。
 // **同じ `tests/golden.json` を CLI 側（`crates/cli/src/pipeline.rs` の `golden_fixtures_match`）も読む**
@@ -32,21 +33,8 @@ const golden = JSON.parse(
 let vips: Vips;
 
 beforeAll(async () => {
-  const mod = (await import("wasm-vips")) as unknown as {
-    default: (cfg?: Record<string, unknown>) => Promise<Vips>;
-  };
-  // **本番と同じ動的ライブラリ一覧**（`VIPS_DYNAMIC_LIBRARIES`）で起こす。
-  // 以前ここだけ resvg を外していたので、svg まわりの差が試験から一切見えなかった。
-  const v = await mod.default({ dynamicLibraries: VIPS_DYNAMIC_LIBRARIES });
-  v.concurrency(1);
-  vips = v;
-  // 本番は `?url` で配られた実ファイルを取りに行くが、node にはその URL が無いので
-  // ディスクから読んで渡す（読み込ませる wasm は同じ物）。
-  await init({
-    module_or_path: readFileSync(
-      fileURLToPath(new URL("../src/wasm/imgdiff_wasm_bg.wasm", import.meta.url)),
-    ),
-  });
+  vips = await bootVips();
+  await bootCore();
 }, 60_000);
 
 it("夹具は 1 枚以上あり、手順のバージョンが一致する", () => {

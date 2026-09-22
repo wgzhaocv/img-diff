@@ -29,7 +29,7 @@ pub struct CleanArgs {
     #[arg(long, default_value_t = true)]
     recurse: bool,
     /// カンマ区切りの対象拡張子
-    #[arg(long, default_value = index::DEFAULT_EXT)]
+    #[arg(long, default_value = index::default_ext())]
     ext: String,
 }
 

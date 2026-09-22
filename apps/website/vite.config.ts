@@ -4,6 +4,7 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { copyFile, mkdir } from "node:fs/promises";
 import { ROUTES } from "./src/routes";
+import { VIPS_RUNTIME_FILES } from "./src/workers/vipsLibs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
@@ -17,10 +18,9 @@ function copyWasmVips(): PluginOption {
   // wasm-vips の exports は "./package.json" を公開しないので main（lib 配下）から lib を得る。
   const libDir = dirname(require.resolve("wasm-vips"));
   const dstDir = fileURLToPath(new URL("./public/vips", import.meta.url));
-  // worker が実際に使う分だけ。**正本は `workers/vips.ts` の `VIPS_DYNAMIC_LIBRARIES`**
-  // （ここから import すると config が `@` 別名込みの src を引き込むので、写しを置いて名指ししてある）。
+  // **正本は `src/workers/vipsLibs.ts`**（何も import しない束なので、ここから読める）。
   // 片方だけ足すと実行時に 404 する。jxl は convert（SPEC §5.4）の入出力で使う。
-  const files = ["vips-es6.js", "vips.wasm", "vips-heif.wasm", "vips-resvg.wasm", "vips-jxl.wasm"];
+  const files = VIPS_RUNTIME_FILES;
   return {
     name: "copy-wasm-vips",
     async buildStart() {
