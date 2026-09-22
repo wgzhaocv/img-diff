@@ -12,7 +12,9 @@
 - **スキャンエラー記録** — `WalkDir` のエントリエラー（権限拒否等）を握り潰さず `skippedFiles` に記録（scan/clean 共通）。
 - **AI 手册 skill** — 正本 `skills/imgdiff-cli/SKILL.md`（**skills.sh 生態**の布局）。CLI は `include_str!` で内嵌し `imgdiff skill` で stdout に表示。常設導入/自動更新/完全性は skills.sh に委譲（`npx skills add github:wgzhaocv/img-diff` / `npx skills update` / lock の `skillFolderHash`）。`~/.agents/skills` へ**自投影しない**（包管理器の領域）。
 - **HEIC/HEIF/AVIF 対応** — libheif 導入で libvips が `vips-heif` モジュールを認識。既定 ext に heic/heif/avif 追加（scan/clean）。配布時は libheif + コーデック DLL も同梱要。
-- **Windows 自己完結パッケージ** — `scripts/package-windows.sh`（DLL 閉包 + heif モジュールを MSYS2 レイアウト模倣で同梱＝PATH 不要）。zip 54MB。**MSYS2 を PATH から排除した素の環境で scan/compare/HEIC/AVIF 動作を検証済み**。
+- **Windows 自己完結パッケージ** — 2026-09-22 から**交叉編譯**で作る（`scripts/package-windows-cross.sh`・
+  `docker/windows-cross/`）。MSYS2 実機用の `scripts/package-windows.sh` も残っているが、
+  そちらは此処から一行も試せないので、次に発版を通したときに消すのが順序として正しい。
 - **自己更新チェーン** — version-check（GitHub Releases・1h・text で通知・ureq native-tls）+ `imgdiff update`（DL + sha256 検証 + **rename-aside で exe/DLL 束を差し替え** + 起動時 .imgdiff-old 掃除）。**v0.1.2 で実リリース検証済み**（0.1.1→0.1.2 自己更新成功）。ホストは GitHub Releases（`wgzhaocv/img-diff`）。
 - **性能** — release + キャッシュで実画像60枚 COLD ~2.3s → WARM ~90ms（debug 比 6.7x、再スキャン ~26x）。
 - **web wasm 化 + parity 検証（Phase 0 完了・commit 済）** — `crates/wasm` を wasm-bindgen で公開
@@ -461,12 +463,31 @@ buffer を誰も読んでいないこと、寸法欄が両方空なら `planGeom
   `createObjectURL` **6 回**・`<img>` 6 枚・「もっと見る（残り 10 グループ）」。
 - `/convert` ⇄ `/scan` の往復で「生成中…」は **0 回**。
 
+**v0.1.7 を発版した（2026-09-22）—— 自己更新が初めて実際に通った**
+
+`https://github.com/wgzhaocv/img-diff/releases/tag/v0.1.7`（macOS arm64 + Windows x64・latest）。
+
+**v0.1.6 には上げなかった。** あの release の mac 版は `d51a131` で打った物で、今日の変更
+（既定 `--ext` への `tif` / `plain_windows_path` / golden 試験）が入っていない。そこへ今日の
+Windows 版だけを足すと、**同じ版を名乗る 2 つの platform が違う挙動になる** ——
+今日塞いだばかりの parity の穴をリリース側で開け直すことになるので、版を上げて両方を
+今日の HEAD から出した。副産物として `imgdiff update` を本物の経路（0.1.6 → 0.1.7）で試せた。
+
+    更新: 0.1.6 → 0.1.7
+    ダウンロード中: imgdiff-0.1.7-aarch64-apple-darwin.zip
+    検証 OK（sha256）。差し替え中…
+    更新完了（0.1.7）。
+
+`TODO.md:16` が「v0.1.2 で実リリース検証済み」と書いてから一度も通っていなかった経路。
+入れ替わった実行ファイルで、**既定 `--ext` に `tif` が入っている / `tests/golden.json` の 4 枚が
+全て一致する / HEIC が読める**ことを確認した。
+
+併せて `install.sh` を `releases/latest/download` へ戻し（そのファイル自身が
+「Windows 版が揃ったら戻せ」と書いていた指示）、導入画面も `releases/latest` に一本化。
+**配信中の install.sh から素の環境へ入れ直して 0.1.7 が入ることまで確認済み。**
+
 ### まだ塞げていない穴
 
-- **リリースがまだ**。Windows 版は交叉編譯で作れるようになった（上の C）が、**上げていない** ——
-  v0.1.6 のタグを打ち、mac と win の zip を上げ、`merge-manifest.sh` で `manifest.json` を束ね、
-  `install.sh` のタグ直指しを `releases/latest/download` へ戻し、`InstallScreen.tsx` を合わせる。
-  そこまでやって初めて `imgdiff update` の自己更新が実際に使える。
 - **サムネの取得が `Thumb` 側にある。** DESIGN §3 は「一覧はメタだけ読み、blob は遅延」と
   書いているのに、blob を引く責任が葉に在るままで、`useInView` と分割表示はその上に乗る近似。
   本筋は `getThumbs(rootId, paths[])` で 1 回の txn にまとめて一覧側が配ること
