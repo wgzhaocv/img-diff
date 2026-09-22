@@ -253,6 +253,23 @@
   （`JSON.stringify` は包みの外で走るので、省けるのは 200 バイトの `setItem` だけ）。
   値打ちは投げても画面を止めないこと。**同期の保存先しか受けないことを型で縛った。**
 
+**本番で確認した（2026-09-22・`https://img-diff.static.tools.nextop.asia/`）**:
+`polar static deploy ./dist --name img-diff`（25 ファイル / 14.8MB・URL は不変）。
+**新しいブラウザ profile（＝初回訪問・キャッシュ空）で通した**:
+
+- `crossOriginIsolated === true`（COOP/COEP は本番でも効いている。false だと wasm-vips が起動しない）。
+- 配信物は master と一致（`index.html` が参照する資産のハッシュが手元の `dist` と同じ）。
+- **HEIC を何も触らず保存 → `300×500 · 4.4 KB · heic 変換なし（そのままコピー）` + `download=sample.heic`。**
+- `/convert` ⇄ `/scan` の往復で「生成中…」**0 回**（4000×3000 → 1920px の変換を保持したまま）。
+- `/scan` 60 枚 → **重複グループ 20 / 重複 40 / 回収可能 29 KB・所要 2395 ms**
+  （この「所要」が**クラスタリングを含む**ようになったのが計時口径の修正）。
+- `/compare` 2 枚 → 「完全に同一のファイル」+ SSIM 1.0。
+
+**退路について**: `polar static` に版の履歴は無い（`deploy` は中身を差し替え、`archive` は
+**今の**中身を落とすだけ）。戻すなら `git checkout 478389c && vp run website#build &&
+polar static deploy ./dist --name img-diff`。**今回は上げる前に旧版の zip を取っていない** ——
+次からは `polar static archive img-diff --out before.zip` を先に打つ。
+
 **やらないと判断した 2 件**: codex #4「選び直しが排队中の仕事を取り消さない」（convert のプールは
 1 本で収益が小さい）/ #7「compare の片側再デコード」（12MP で 48MB の常駐が要る。codex 自身が最低に置いた）。
 
