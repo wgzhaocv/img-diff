@@ -15,7 +15,6 @@ import {
   saveSpec,
 } from "@/lib/convertPlan";
 import { convertSource, outPathFor } from "@/lib/convert";
-import type { HashPool } from "@/lib/workerPool";
 import { convertOptions } from "./options";
 import { extOf, isConvertibleImage, isScannableImage, uniquePath } from "@/lib/imagePaths";
 import {
@@ -509,6 +508,26 @@ describe("プレビューは原寸が届いてから作る", () => {
     expect(useConvertStore.getState().preview).toBeNull();
   });
 
+  it("素通しと分かっているときは原寸を待たない（開いて何も変えずに保存するのが既定の操作）", async () => {
+    // 出力は元のバイト列そのもの＝符号化しないので、原寸に一切依存しない。
+    // 寸法欄が空なら計画は必ず noop なので、原寸を渡した場合と答えが変わらない。
+    const asked: string[] = [];
+    useConvertStore.getState().setSource(src("a.png"));
+    useConvertStore.getState().setForm(DEFAULT_FORM); // 形式そのまま・寸法欄は空
+    useConvertStore.setState({
+      loadInfo: () => {
+        asked.push("loadInfo");
+        return Promise.resolve();
+      },
+    });
+    await useConvertStore.getState().renderPreview();
+    const preview = useConvertStore.getState().preview;
+    expect(preview?.passedThrough).toBe(true);
+    expect(preview?.format).toBe("png");
+    // 「変換前」の表示に要るので、待たないだけで催促はする。
+    expect(asked).toEqual(["loadInfo"]);
+  });
+
   it("原寸が無いときは取りに行かせる（取得が落ちていても詰まらない）", async () => {
     // 催促しないと鍵が二度と変わらず、プレビューも保存ボタンも永久に止まる。
     const asked: string[] = [];
@@ -585,14 +604,12 @@ describe("規則 4: 素通しの判定（passesThrough）", () => {
 });
 
 describe("convertSource が素通しを主線程で済ませる（配線そのもの）", () => {
-  // **ワーカーへ投げたら落ちるプール**を渡す。素通しの判定が効いていれば 1 度も呼ばれない。
+  // **触ったら落ちるプール**を渡す。素通しの判定が効いていれば取り出しすら起きない。
   // 述語の単体試験だけだと、`convertSource` に `planned` を渡し忘れても緑のままになる
   // （実際、この試験を足すまでそこは自動では守られていなかった）。
-  const refusingPool = {
-    submit: () => {
-      throw new Error("素通しのはずなのにワーカーへ投げた");
-    },
-  } as unknown as HashPool;
+  const refusingPool = () => {
+    throw new Error("素通しのはずなのにワーカーへ投げた");
+  };
 
   const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3]);
   const src = { path: "a.png", file: new Blob([bytes], { type: "image/png" }) };

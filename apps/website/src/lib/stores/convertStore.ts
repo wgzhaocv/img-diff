@@ -17,6 +17,7 @@ import {
   normalizeOutFormat,
   parseDim,
   parseHexRgb,
+  passesThrough,
   plannedOutput,
 } from "@/lib/convertPlan";
 import { PoolAbortError, poolRef } from "@/lib/workerPool";
@@ -164,8 +165,7 @@ let previewQueued = false;
  *
  * 真偽値では足りない: 選び直しを跨ぐと、**古い取得の後始末が新しい取得の旗を降ろす**。
  * そうなると走っている最中の 1 枚が「未取得」に見え、`renderPreview` の催促で
- * もう一度読み込み・デコードされ、`prefillDimensions` が原寸を二度書き込む
- * （空にした寸法欄が勝手に埋まる）。
+ * もう一度読み込み・デコードされる（48MP の png なら丸ごと 1 回ぶんの無駄）。
  */
 let infoGen: number | null = null;
 /**
@@ -387,7 +387,6 @@ export const useConvertStore = create<ConvertState>()(
               bytes: res.bytes,
             },
           });
-          prefillDimensions(get, set);
         } catch {
           // サムネが無くても変換はできるので、失敗そのものは報せない。
           // ただし**答えは必ず残す** —— 何も書かずに終わるとプレビューがそこで止まる。
@@ -408,19 +407,6 @@ export const useConvertStore = create<ConvertState>()(
         }
         const src = state.source;
         if (!src) return;
-        // **原寸が届くまでは作らない。** 理由は 2 つあって、どちらも原寸が
-        // `previewKey` の一部だから起きる（サムネと一緒に後から届く）:
-        //   1. 原寸は「大きすぎて書けない」判定の入力（`writeBlockFor`）。知らないまま走らせると、
-        //      押す前に止めるはずの変換をプレビューだけが走らせてしまう。
-        //   2. 届いた瞬間に鍵が変わる（寸法欄も原寸で埋まる・`prefillDimensions`）ので、
-        //      先に始めた分は**捨てるために符号化する**ことになる。実測 1024×1024 の avif で
-        //      4.2s → 8.5s。「選んだ直後だけ倍遅い」の正体はこれ。
-        if (!state.info) {
-          // **無いなら催促する。** 黙って戻るだけにすると、取得が落ちていた場合に
-          // 鍵が二度と変わらず、プレビューも保存ボタンも永久に止まる。
-          void get().loadInfo();
-          return;
-        }
         const resolved = resolveOptions(state.form);
         // 入力が不正なときは黙って前の絵を残す（理由は欄の直下に出ている）。
         if ("error" in resolved) return;
@@ -437,10 +423,25 @@ export const useConvertStore = create<ConvertState>()(
           if (state.previewError?.key === key) set({ previewError: null });
           return;
         }
+        // **原寸が届くまでは作らない。ただし素通しだけは例外。**
+        // 待つ理由は、原寸が「大きすぎて書けない」判定（`cannotWriteReason`）の入力であり、
+        // かつ `previewKey` の一部なので、知らないまま始めると捨てるために符号化することになるから。
+        // **素通しはそのどちらにも当たらない** —— 出力は元のバイト列そのもので、符号化もしないので
+        // 原寸に一切依存しない。寸法欄が空なら `planned` 無しでも正しく判定できる
+        // （両方 null ＝ 計画は必ず noop）。ここで待たないぶん、
+        // 「開いて何も変えずに保存」が原寸のデコードを待たなくなる。
+        if (!state.info) {
+          // **無くても催促は必ず出す。** 「変換前」の寸法とサムネに要るし、黙って戻るだけにすると
+          // 取得が落ちた場合に鍵が二度と変わらず、プレビューも保存ボタンも永久に止まる。
+          void get().loadInfo();
+          if (!passesThrough(resolved.options, srcFormat)) return;
+        }
         // **原寸から導いた計画は 1 回だけ作る。** 「止めるか」と「素通しするか」が同じ物を見ることで、
         // 二つの判断がズレようが無くなる（ズレていたのがこの直前までの姿）。
         const planned =
-          state.info.width > 0 ? plannedOutput(resolved.options, state.info) : undefined;
+          state.info && state.info.width > 0
+            ? plannedOutput(resolved.options, state.info)
+            : undefined;
         // 書けない・大きすぎるなら試さずに理由を出す。
         const reason = cannotWriteReason(resolved.options, srcFormat, planned);
         if (reason) {
@@ -457,7 +458,7 @@ export const useConvertStore = create<ConvertState>()(
           const out = await convertSource(
             src,
             resolved.options,
-            pool.get(),
+            () => pool.get(),
             mimeOf(format),
             planned,
           );
@@ -544,17 +545,3 @@ export const useConvertStore = create<ConvertState>()(
     },
   ),
 );
-
-/** 原寸が分かった時点で寸法欄を埋める。 */
-function prefillDimensions(
-  get: () => ConvertState,
-  set: (patch: Partial<ConvertState>) => void,
-): void {
-  const info = get().info;
-  if (!info || info.width <= 0) return;
-  const form = get().form;
-  // **空のときだけ。** 取得を待つ間に利用者が打ち始めていたら、それを上書きしない
-  // （`loadInfo` は `info` が在れば早切りするので、ここは 1 枚につき 1 回しか通らない）。
-  if (form.width.trim() !== "" || form.height.trim() !== "") return;
-  set({ form: { ...form, width: String(info.width), height: String(info.height) } });
-}

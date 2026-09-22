@@ -194,7 +194,10 @@ export function ConvertPreview() {
           ) : shown ? (
             <>
               <div className="num text-xs text-muted-foreground">
-                {shown.width}×{shown.height} · {formatBytes(shown.bytes)} · {shown.format}
+                {/* 素通しは原寸の到着を待たないので、寸法だけ少し遅れて出ることがある。
+                    0 を見せるくらいなら、分かるまで寸法の区画ごと出さない。 */}
+                {shown.width > 0 ? `${shown.width}×${shown.height} · ` : ""}
+                {formatBytes(shown.bytes)} · {shown.format}
               </div>
               {shown.passedThrough ? (
                 // 何も変える指定が無い＝元のファイルがそのままコピーされる（SPEC §5.4 規則 4）。
@@ -222,7 +225,7 @@ export function ConvertPreview() {
         onOpenChange={setZoomed}
         name={name}
         url={ready ? savableUrl : null}
-        dims={shown ? `${shown.width}×${shown.height}` : ""}
+        dims={shown && shown.width > 0 ? `${shown.width}×${shown.height}` : ""}
         actions={
           <PreviewActions
             ready={ready}

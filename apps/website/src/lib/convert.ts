@@ -47,7 +47,11 @@ type Output = {
 export async function convertSource(
   src: ConvertSource,
   options: ConvertOptions,
-  pool: HashPool,
+  /**
+   * **ワーカーの取り出しは遅らせる。** 素通しならワーカーは 1 本も要らないので、
+   * 値で受けると「読まない」と言いながらプールの起動だけは払うことになる。
+   */
+  getPool: () => HashPool,
   outMime: string,
   planned?: PlannedOutput,
 ): Promise<Output> {
@@ -67,7 +71,7 @@ export async function convertSource(
       passedThrough: true,
     };
   }
-  const res = (await pool.submit(
+  const res = (await getPool().submit(
     { op: "convert", path: src.path, blob: src.file, options, srcFormat },
     [],
   )) as ConvertResult;

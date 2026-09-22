@@ -85,6 +85,12 @@ export function ConvertOptions() {
       setForm({ [edited]: raw });
       return;
     }
+    // **空にしたら相手も空にする。** 錠が入っている以上、片方だけ残ると
+    // 「縦横比を保つ」と言いながら残った側だけの等比縮小になる。両方空＝原寸のまま。
+    if (raw.trim() === "") {
+      setForm({ width: "", height: "" });
+      return;
+    }
     const n = parseDim(raw);
     const other = n == null ? null : matchRatio(info, edited, n);
     const key = edited === "width" ? "height" : "width";
@@ -113,7 +119,7 @@ export function ConvertOptions() {
             <Input
               id="cv-w"
               inputMode="numeric"
-              placeholder="自動"
+              placeholder={placeholderFor(info?.width)}
               className="w-28 font-mono tabular-nums"
               value={form.width}
               onChange={(e) => editDim("width", e.target.value)}
@@ -124,7 +130,7 @@ export function ConvertOptions() {
             <Input
               id="cv-h"
               inputMode="numeric"
-              placeholder="自動"
+              placeholder={placeholderFor(info?.height)}
               className="w-28 font-mono tabular-nums"
               value={form.height}
               onChange={(e) => editDim("height", e.target.value)}
@@ -233,7 +239,8 @@ export function ConvertOptions() {
  * （Next.js の `Image` が `srcset` を焼き分けるのと同じ意味論）。ついでに合わせ方・寄せる位置・
  * 背景色が効かなくなるので、画面もそのぶん静かになる。
  *
- * 原寸の数値は文字で出さない: プレビューの「変換前」が同じ数字を出している（UI.md §6.1）。
+ * 原寸の数値は独立した文字では出さない: 寸法欄の placeholder とプレビューの「変換前」が
+ * 同じ数字を出している（UI.md §6.1）。
  */
 function SizePresets({ presets, lockRatio }: { presets: number[]; lockRatio: boolean }) {
   const info = useConvertStore((s) => s.info);
@@ -250,8 +257,10 @@ function SizePresets({ presets, lockRatio }: { presets: number[]; lockRatio: boo
         key: "original",
         label: "原寸",
         hint: `${info.width}×${info.height}`,
-        selected: width === String(info.width) && height === String(info.height),
-        patch: { width: String(info.width), height: String(info.height) },
+        // **空欄こそが原寸。** 数字を書き戻すと「利用者が寸法を指定した」ことになってしまい、
+        // 合わせ方の欄が出てきたり、素通しが原寸の到着を待つようになる（`renderPreview`）。
+        selected: width.trim() === "" && height.trim() === "",
+        patch: { width: "", height: "" },
         extra: "",
       },
       ...presets.map((w) => {
@@ -292,6 +301,15 @@ function SizePresets({ presets, lockRatio }: { presets: number[]; lockRatio: boo
       ))}
     </div>
   );
+}
+
+/**
+ * 寸法欄の placeholder。**原寸が分かっていればそれを見せる** ——
+ * 欄は空のままで「そのまま」を意味するので、何になるかを見せるのは placeholder の仕事。
+ * 原寸が届く前とデコードできなかったときは「自動」に戻す（0 を見せない）。
+ */
+function placeholderFor(px: number | undefined): string {
+  return px != null && px > 0 ? String(px) : "自動";
 }
 
 /**
