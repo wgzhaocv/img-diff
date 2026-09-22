@@ -42,17 +42,17 @@ const FEATURES = [
 ];
 
 export function ScanScreen() {
-  const {
-    status,
-    result,
-    elapsedMs,
-    strictness,
-    threshold,
-    setStrictness,
-    setThreshold,
-    runFiles,
-    runFolder,
-  } = useScanStore();
+  // **欄ごとに購読する。** まとめて `useScanStore()` を呼ぶと購読対象が store 全体になり、
+  // 進捗が 1 回動くたびに一覧まで描き直される（進捗は `ScanProgressBar` に隔離してあるのに）。
+  const status = useScanStore((s) => s.status);
+  const result = useScanStore((s) => s.result);
+  const elapsedMs = useScanStore((s) => s.elapsedMs);
+  const strictness = useScanStore((s) => s.strictness);
+  const threshold = useScanStore((s) => s.threshold);
+  const setStrictness = useScanStore((s) => s.setStrictness);
+  const setThreshold = useScanStore((s) => s.setThreshold);
+  const runFiles = useScanStore((s) => s.runFiles);
+  const runFolder = useScanStore((s) => s.runFolder);
   const [thresholdInput, setThresholdInput] = useState(threshold);
   const [savedRoots, setSavedRoots] = useState<RootEntry[]>([]);
   const inputRef = useRef<HTMLInputElement | null>(null);

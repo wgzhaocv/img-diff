@@ -2,9 +2,14 @@ import { useEffect, useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { getThumb } from "@/lib/db";
+import { useInView } from "@/lib/useInView";
 
 // サムネ表示（透過 PNG は市松背景）。優先度: 渡された thumb Blob（File[] 経路）→ IDB の thumbs
 // （FS Access 経路・権限ゼロでも表示可）→ 原 File（フォールバック）。マウント中だけ URL を保持し解放。
+//
+// **画面に入るまで読まない**（`useInView`）。重複一覧は全メンバを描くので、
+// マウントと同時に読むと数千件の IDB 問い合わせが一斉に出る（FS Access 経路は
+// `thumbByPath` を持たないので、1 枚 1 問い合わせになる）。
 /**
  * 透過画像を置く枠（市松背景 + 罫線 + 角丸）。UI.md §6 の「サムネ網格」の見た目そのもの。
  * `Thumb` を使わない場所（変換プレビューの 2 枚並べ等）でも**同じ枠**にするため公開する。
@@ -27,8 +32,10 @@ export function Thumb({
   className?: string;
 }) {
   const [url, setUrl] = useState<string | null>(null);
+  const { ref, inView } = useInView<HTMLDivElement>();
 
   useEffect(() => {
+    if (!inView) return;
     let objectUrl: string | null = null;
     let cancelled = false;
 
@@ -52,10 +59,10 @@ export function Thumb({
       if (objectUrl) URL.revokeObjectURL(objectUrl);
       setUrl(null);
     };
-  }, [file, thumb, rootId, path]);
+  }, [file, thumb, rootId, path, inView]);
 
   return (
-    <div className={cn(IMAGE_FRAME, className)}>
+    <div ref={ref} className={cn(IMAGE_FRAME, className)}>
       {url ? (
         <img src={url} alt={alt} loading="lazy" className="size-full object-cover" />
       ) : (

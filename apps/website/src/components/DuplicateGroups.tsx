@@ -1,6 +1,7 @@
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { CheckCircle2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Thumb } from "@/components/Thumb";
 import { DeleteDuplicatesButton } from "@/components/DeleteDuplicatesButton";
@@ -9,6 +10,14 @@ import { formatBytes } from "@/lib/format";
 import { baseNameOf } from "@/lib/imagePaths";
 import { STRICTNESS_LABEL, type DupGroup, type ImageRecord } from "@/lib/core";
 import { useScanStore } from "@/lib/stores/scanStore";
+
+/**
+ * 一度に描くグループ数。**数字の出所は「一画面に入る量の数倍」** ——
+ * 全部描くと、重複の多いフォルダでは `<figure>` が画像の枚数ぶん出来て、
+ * それぞれがサムネの読み込みを抱える（数千枚のフォルダで数千件）。
+ * 削除ダイアログの下見も同じ理由で 100 件で切っている（`DeleteDuplicatesButton`）。
+ */
+const GROUP_PAGE = 30;
 
 // 表示データ（結果・グループ）はストアから直接読む（画面からの props 経由の受け渡しを避ける）。
 export function DuplicateGroups() {
@@ -19,6 +28,11 @@ export function DuplicateGroups() {
   const fileByPath = result?.fileByPath;
   const thumbByPath = result?.thumbByPath;
   const rootId = result?.rootId;
+
+  // **統計は常に全件から出す**（下の「もっと見る」は描く量だけの話で、結果そのものではない）。
+  const [shownGroups, setShownGroups] = useState(GROUP_PAGE);
+  // 走査し直したら最初の 1 ページへ戻す（前の結果の位置を引きずらない）。
+  useEffect(() => setShownGroups(GROUP_PAGE), [groups]);
 
   const imageByPath = useMemo(() => new Map(images.map((r) => [r.path, r])), [images]);
   const { duplicates, reclaimable } = useMemo(
@@ -45,7 +59,7 @@ export function DuplicateGroups() {
         <Card className="p-8 text-center text-muted-foreground">重複は見つかりませんでした。</Card>
       ) : (
         <div className="space-y-4">
-          {groups.map((group) => (
+          {groups.slice(0, shownGroups).map((group) => (
             <GroupCard
               key={group.id}
               group={group}
@@ -55,6 +69,13 @@ export function DuplicateGroups() {
               rootId={rootId}
             />
           ))}
+          {shownGroups < groups.length ? (
+            <div className="flex justify-center">
+              <Button variant="outline" onClick={() => setShownGroups((n) => n + GROUP_PAGE)}>
+                もっと見る（残り {groups.length - shownGroups} グループ）
+              </Button>
+            </div>
+          ) : null}
         </div>
       )}
     </section>

@@ -1,4 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
+import { dedupeInFlight } from "@/lib/inflight";
 
 // IndexedDB 永続ストア（DESIGN §3）。roots=フォルダの永続ハンドル、jobs=1 回の実行状態、
 // hashes=フォルダに紐づく長命キャッシュ（＝進捗・キャッシュ・再開の正本）、thumbs=プレビュー用サムネ。
@@ -99,10 +100,17 @@ export async function putHash(entry: HashEntry): Promise<void> {
   await db.put("hashes", entry);
 }
 
-export async function getThumb(rootId: string, path: string): Promise<Blob | undefined> {
-  const db = await getDB();
-  return (await db.get("thumbs", [rootId, path]))?.blob;
-}
+/**
+ * サムネを 1 件引く。**同時に同じ物を頼まれたら 1 本にまとめる** ——
+ * 同じファイルが複数のグループに出るし、一覧を捲り戻すと枠が作り直される。
+ */
+export const getThumb: (rootId: string, path: string) => Promise<Blob | undefined> = dedupeInFlight(
+  (rootId, path) => `${rootId}\n${path}`,
+  async (rootId, path) => {
+    const db = await getDB();
+    return (await db.get("thumbs", [rootId, path]))?.blob;
+  },
+);
 
 /// サムネは best-effort（表示補助であって正本でない）。quota 超過等で失敗してもスキャンは止めない
 /// （putHash＝再開の正本は別 txn で先にコミット済み）。DESIGN §6/§8。

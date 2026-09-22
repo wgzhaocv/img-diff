@@ -69,8 +69,9 @@ export const useScanStore = create<ScanState>((set, get) => {
    * 作り直す必要が無い / 競合で追い越された ときは `null`（＝ `groups` を書き換えない）。
    * **失敗したときは空配列**（今の入力に合う一覧を作れない以上、古い一覧を残さない）。
    *
-   * **store をここで書かない。** 呼び出し側が 1 回の更新にまとめられるようにするため ——
-   * `ScanScreen` は store 全体を購読しているので、更新を分けると一覧が丸ごと描き直される。
+   * **store をここで書かない。** 呼び出し側が「結果」と「所要」を 1 回の更新で書けるようにするため。
+   * （`ScanScreen` は欄ごとに購読するようになったので全体の描き直しは起きないが、
+   *   途中の状態が一瞬見えるのは変わらないので、まとめる方を残す。）
    */
   async function clusterIfNeeded(): Promise<DupGroup[] | null> {
     const { result, strictness, threshold } = get();
