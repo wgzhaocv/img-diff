@@ -23,25 +23,25 @@ pub fn bundle_root() -> Option<PathBuf> {
     Some(bin.parent()?.to_path_buf())
 }
 
-/// Windows の `canonicalize` が返す `\\?\C:\…`（verbatim path）を素の `C:\…` に戻す。
-/// **剥がせないときは `None`** —— 呼び出し側は「渡さない」を選べる。
+/// Windows の `canonicalize` が返す verbatim path（`\\?\…`）を、C から見える普通の形へ直す。
+/// verbatim でなければ `None`（＝直す必要が無い）。
 ///
 /// **これは C へ渡す直前でだけ使う。** Rust の `std::fs` にとって verbatim は**得**で
 /// （MAX_PATH も予約名も効かない）、`update` の入れ替えはその上に乗っている。
 /// 困るのは `VIPSHOME` から先 —— libvips は `g_build_filename` で素直に繋ぐだけなので
 /// `\\?\C:\…` を解釈できず、モジュール置き場を見失う
-/// ＝ **HEIC が「未対応の形式」になる**（wine 上で実際にそうなった）。
+/// ＝ **HEIC が「未対応の形式」になる**（wine 上で実測）。
 ///
-/// **UNC（`\\?\UNC\server\share\…`）は剥がさない。** 前置きだけ取ると
-/// `UNC\server\share\…` という**相対パスもどき**になって、かえって壊れる。
-/// 網の上に置かれた場合は `VIPSHOME` を設定しない（libvips は従来どおり argv0 から推定する）。
-pub fn plain_windows_path(path: &Path) -> Option<&str> {
-    let s = path.to_str()?;
-    let rest = s.strip_prefix(r"\\?\")?;
-    if rest.starts_with("UNC\\") {
-        return None;
-    }
-    Some(rest)
+/// **UNC も直せる**（`\\?\UNC\server\share\…` → `\\server\share\…`）。前置きを落とすだけだと
+/// `UNC\server\share\…` という道として成り立たない物になるので、`\\` を付け直す。
+/// 網の上に置いた同梱パッケージでも `VIPSHOME` を立てられないと、libvips は
+/// **ビルド時プレフィックスを argv0 より先に試す**ので、同梱モジュールを使う保証が無くなる。
+pub fn plain_windows_path(path: &Path) -> Option<String> {
+    let rest = path.to_str()?.strip_prefix(r"\\?\")?;
+    Some(match rest.strip_prefix(r"UNC\") {
+        Some(share) => format!(r"\\{share}"),
+        None => rest.to_string(),
+    })
 }
 
 /// この CLI の Producer（app="cli"・バージョンは本クレート・vips 実体・ハッシュ手順）。
@@ -138,18 +138,17 @@ mod tests {
 
     /// `VIPSHOME` へ渡せる形か。**渡し方を間違えると HEIC が読めなくなる**（wine で実際に起きた）。
     #[test]
-    fn verbatim_drive_paths_become_plain_and_unc_is_refused() {
+    fn verbatim_paths_become_plain_including_unc() {
         assert_eq!(
             plain_windows_path(Path::new(r"\\?\C:\imgdiff\bin\imgdiff.exe")),
-            Some(r"C:\imgdiff\bin\imgdiff.exe")
+            Some(r"C:\imgdiff\bin\imgdiff.exe".to_string())
         );
         // 前置きが無ければ渡す必要も無い（unix の道はここへ来ない）。
         assert_eq!(plain_windows_path(Path::new("/opt/imgdiff/bin/imgdiff")), None);
-        // **UNC は剥がさない** —— 前置きだけ取ると `UNC\server\share\…` という
-        // 相対パスもどきになり、かえって壊れる。網の上なら VIPSHOME を設定しない方が正しい。
+        // **UNC は普通の UNC に直す**（前置きだけ落とすと道として成り立たない物になる）。
         assert_eq!(
             plain_windows_path(Path::new(r"\\?\UNC\server\share\imgdiff\bin\imgdiff.exe")),
-            None
+            Some(r"\\server\share\imgdiff\bin\imgdiff.exe".to_string())
         );
     }
 

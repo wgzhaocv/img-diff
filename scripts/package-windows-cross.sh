@@ -77,17 +77,32 @@ while [ ${#queue[@]} -gt 0 ]; do
       cp "$VIPS_ROOT/bin/$d" "$BUNDLE/bin/"
       queue+=("$VIPS_ROOT/bin/$d")
     else
-      # Windows 同梱の DLL（kernel32 等）はここに来る。名前で判らないので、
-      # **持って行かなかった物は全部並べて見せる** —— 黙って落とすと、動かない zip が出来る。
-      case "$d" in
-      *.dll) missing[${#missing[@]}]="$d" ;;
+      # ここへ来るのは「同梱しなかった依存」。**Windows が必ず持っている物だけを許す** ——
+      # 黙って落とすと、起動しない zip が出来る（DLL の取りこぼしは煙試験まで気づけない）。
+      seen[$d]=1
+      lower="$(printf '%s' "$d" | tr '[:upper:]' '[:lower:]')"
+      case "$lower" in
+      api-ms-win-* | ext-ms-*) ;; # Windows の API set（必ず在る）
+      advapi32.dll | bcrypt.dll | bcryptprimitives.dll | cfgmgr32.dll | combase.dll | crypt32.dll) ;;
+      d3d9.dll | dnsapi.dll | dwrite.dll | dxgi.dll | gdi32.dll | gdiplus.dll | iphlpapi.dll) ;;
+      kernel32.dll | psapi.dll) ;;
+      msimg32.dll | msvcrt.dll | ncrypt.dll | ntdll.dll | ole32.dll | oleaut32.dll | propsys.dll) ;;
+      rpcrt4.dll | secur32.dll | shell32.dll | shlwapi.dll | user32.dll | userenv.dll) ;;
+      usp10.dll | wldap32.dll | ws2_32.dll) ;;
+      *)
+        missing[${#missing[@]}]="$d"
+        ;;
       esac
     fi
   done
 done
-echo "=== 同梱 DLL: ${#seen[@]} ===" >&2
-echo "=== 同梱しなかった依存（Windows 側に在る前提）: $(printf '%s ' "${missing[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' ')" >&2
-echo "=== bundle: $(du -sh "$BUNDLE" | cut -f1) ===" >&2
+if [ ${#missing[@]} -gt 0 ]; then
+  echo "同梱できず、Windows が持っている保証も無い DLL がある:" >&2
+  printf '  %s\n' "${missing[@]}" | sort -u >&2
+  echo "（libvips の依存が増えたか、取得元の構成が変わった。上の allowlist を見直すこと）" >&2
+  exit 1
+fi
+echo "=== 同梱 DLL: $(ls "$BUNDLE/bin" | wc -l | tr -d ' ') / bundle: $(du -sh "$BUNDLE" | cut -f1) ===" >&2
 
 # zip の**根は `imgdiff/`**（`update.rs` の ARCHIVE_ROOT）。`-r` で `$OUT` から相対に固める。
 ZIP_NAME="imgdiff-$VERSION-$TARGET.zip"

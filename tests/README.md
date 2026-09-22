@@ -28,12 +28,20 @@ vips linear g.v g8.v 110 130 --uchar
 vips cast g8.v tests/fixtures/ripple.png uchar
 
 # photo.jpg — JPEG（IDCT と chroma upsampling の実装差が出る）
-vips sines p.v 256 192 --hfreq 0.8 --vfreq 1.3
-vips linear p.v p8.v 127 128 --uchar
-vips bandjoin "p8.v p8.v p8.v" prgb.v
-vips cast prgb.v "tests/fixtures/photo.jpg[Q=85]" uchar
+# **3 面それぞれ別の模様**にする。同じ模様を 3 回並べると全画素 R==G==B になり、
+# 4:2:0 でも色度が一定＝色度補間を一度も試験できない（最初それで作ってしまった）。
+vips sines sa.v 256 192 --hfreq 1.1 --vfreq 0.3
+vips sines sb.v 256 192 --hfreq 0.2 --vfreq 1.7
+vips sines sc.v 256 192 --hfreq 2.3 --vfreq 2.1
+vips linear sa.v ra.v 120 135 --uchar
+vips linear sb.v rb.v 120 120 --uchar
+vips linear sc.v rc.v 120 110 --uchar
+vips bandjoin "ra.v rb.v rc.v" rgb.v
+vips cast rgb.v "tests/fixtures/photo.jpg[Q=85]" uchar
 
 # alpha.png — 透過あり RGBA（手順 4 の白平坦化が効く）
+vips sines p.v 256 192 --hfreq 0.8 --vfreq 1.3
+vips linear p.v p8.v 127 128 --uchar
 vips bandjoin "p8.v p8.v p8.v p8.v" prgba.v
 vips cast prgba.v tests/fixtures/alpha.png uchar
 ```

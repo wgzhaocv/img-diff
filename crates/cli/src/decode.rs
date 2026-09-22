@@ -107,12 +107,9 @@ fn set_bundled_vipshome() {
     // **ここが C 境界。** Windows の `canonicalize` は `\\?\C:\…`（verbatim）を返すが、
     // libvips は `g_build_filename` で素直に繋ぐだけなのでそれを解釈できず、
     // **モジュール置き場を見失って HEIC が「未対応の形式」になる**（wine で実測）。
-    // 素の形に直せないとき（UNC）は**設定しない** —— 壊れた道を渡すくらいなら、
-    // libvips の従来どおりの推定（argv0）に任せる方が安全側。
     match crate::util::plain_windows_path(&root) {
         Some(plain) => std::env::set_var("VIPSHOME", plain),
-        None if root.to_str().is_some_and(|s| s.starts_with(r"\\?\")) => return,
-        None => std::env::set_var("VIPSHOME", &root),
+        None => std::env::set_var("VIPSHOME", &root), // verbatim でない＝そのまま渡せる
     }
 }
 

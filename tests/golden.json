@@ -26,11 +26,11 @@
     },
     {
       "file": "photo.jpg",
-      "sha256": "fff6058a705ad342e4da0575eae3887dc86b78efeb0ed10d0dff65939dcecf0b",
+      "sha256": "91be5fc892c3aaf03b5e364ed6e17a1fd9a1a1d86042509da82167fb25cd1e75",
       "width": 256,
       "height": 192,
-      "dhash": "03c1e0f0fc7e1f0f",
-      "why": "JPEG。IDCT と chroma upsampling の実装差がここに出る。"
+      "dhash": "1f1f8f0f0703838b",
+      "why": "JPEG（4:2:0・R/G/B が別の模様＝全画素で有彩色）。IDCT と chroma upsampling の実装差がここに出る。最初は 3 面とも同じ模様で作ってしまい、全画素 R==G==B ＝ 色度を一度も試験していなかった。"
     },
     {
       "file": "ripple.png",

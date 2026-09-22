@@ -28,6 +28,15 @@ PREFIX = "mingw-w64-x86_64-"
 # jxl も同じく optdepend。CLI の走査対象拡張子に jxl は無いので入れない（SPEC §5.4）。
 ROOTS = [f"{PREFIX}libvips", f"{PREFIX}libheif"]
 
+# **版を固定する。** `mingw64.db` は生きている索引なので、放っておくと「その日の最新」を拾う ——
+# mac 側と版がずれれば、同じ画像から違う画素が出て SPEC §1 の parity が黙って崩れる。
+# ここで拒めば、上流が上がったときに**ビルドが落ちて**気づける（気づかないまま配るのが最悪）。
+# 上げるときは実測し直して（`scripts/smoke-windows-cross.sh`）この表を書き換える。
+PINNED = {
+    f"{PREFIX}libvips": "8.18.6-1",
+    f"{PREFIX}libheif": "1.23.5-1",
+}
+
 
 def fetch(url: str) -> bytes:
     with urllib.request.urlopen(url) as r:  # noqa: S310 - 固定の https 先
@@ -87,8 +96,9 @@ def closure(packages, provides, roots: list[str]) -> list[str]:
         want = bare(queue.pop())
         name = provides.get(want)
         if name is None:
-            print(f"  ?  依存 {want} が見つからない（飛ばす）", file=sys.stderr)
-            continue
+            # **飛ばさない。** 依存名が変わった / PROVIDES を取り違えたときに、
+            # 「ビルドは通るのに DLL が足りない zip」が出来るのが一番たちが悪い。
+            raise SystemExit(f"依存 {want} を解決できない（索引の形が変わった可能性）")
         if name in seen:
             continue
         seen.add(name)
@@ -100,6 +110,13 @@ def main() -> int:
     out = Path(sys.argv[1] if len(sys.argv) > 1 else "/opt/win")
     packages, provides = load_db()
     names = closure(packages, provides, ROOTS)
+    for pkg, want_version in PINNED.items():
+        got = packages[pkg]["VERSION"][0]
+        if got != want_version:
+            raise SystemExit(
+                f"{pkg} が {got}（固定は {want_version}）。"
+                "上流が上がっている —— 実測し直してから PINNED を書き換えること。"
+            )
     print(f"=== {len(names)} パッケージを展開する ===", file=sys.stderr)
     out.mkdir(parents=True, exist_ok=True)
     for name in names:
@@ -127,6 +144,9 @@ def main() -> int:
                 if f is None:
                     continue  # ディレクトリ項目。下の mkdir が要るぶんを作るので落として良い。
                 dst = out / rel
+                # **出力先が `out` の外へ出ないこと**を確かめる（`..` を含む項目・書庫の細工）。
+                if not dst.resolve().is_relative_to(out.resolve()):
+                    raise SystemExit(f"展開先が外へ出る: {member.name}")
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 with dst.open("wb") as w:
                     shutil.copyfileobj(f, w)
