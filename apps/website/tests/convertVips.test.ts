@@ -370,7 +370,7 @@ describe("入力一覧の情報取得（applyInfo）", () => {
 
 /** 1600×1200・orientation=6 の実ファイル（autorot 後は 1200×1600）。 */
 const rotated: ArrayBuffer = new Uint8Array(
-  readFileSync(fileURLToPath(new URL("./fixtures/rotated.jpg", import.meta.url))),
+  readFileSync(fileURLToPath(new URL("../../../tests/fixtures/rotated.jpg", import.meta.url))),
 ).buffer;
 
 describe("EXIF の向きが付いた実ファイル", () => {

@@ -50,8 +50,13 @@ AVIF は読める）ので、`libheif-js`（libde265 入り）で RGBA まで解
 
 **確かめ方**: `scripts/check-heic-parity.sh`（原生 vips が要るので `vp test` には載せない）。
 
-> **golden 夹具**: `tests/` に固定画像と既知 dHash を置き、CLI/web 両ビルドが同値を出すか検証する
-> （実装前にこの基準を用意する）。
+> **golden 夹具**: `tests/` に固定画像と既知 dHash を置き、CLI/web 両ビルドが同値を出すか検証する。
+> **実装済み**: `tests/golden.json` + `tests/fixtures/`。CLI 側は `cargo test`
+> （`crates/cli/src/pipeline.rs` の `golden_fixtures_match`）、web 側は `vp test`
+> （`apps/website/tests/goldenDecode.test.ts`）が**同じファイル**を読む。
+> 2026-09-22 時点で jpg / png / 透過 PNG / EXIF 回転 jpg の 4 枚は**両端が同じ dHash**を出す
+> （＝この 4 形式については手順 1〜3 も実際に一致している）。**HEIC はこの集合に入れない** ——
+> 上の表のとおり画素が約 29.9% 違うので、一致を一般には主張できない。
 
 ## 2. 厳密度の軸（strictness）
 
