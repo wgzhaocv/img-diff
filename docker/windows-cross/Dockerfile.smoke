@@ -1,0 +1,19 @@
+# 交叉編譯した `.exe` を**実際に動かす**ためだけの容器。
+# **amd64 が要るのはここだけ**（wine は x86_64 のバイナリを解釈する）。宿主が Apple Silicon なら
+# Rosetta で走る —— 遅いが、動かすのは煙試験の数コマンドだけ。
+FROM --platform=linux/amd64 debian:trixie-slim
+
+# wine64 と、zip を解くための道具。`--install-recommends` を切ると wine の必須部品まで
+# 落ちることがあるので、ここでは既定のまま入れる。
+RUN dpkg --add-architecture i386 \
+ && apt-get update && apt-get install -y --no-install-recommends \
+      wine wine64 unzip ca-certificates python3 \
+ && rm -rf /var/lib/apt/lists/*
+
+# wine の初回起動で作る前置きを**像の中で**済ませておく（毎回の起動を速くする + 出力を綺麗に保つ）。
+ENV WINEPREFIX=/opt/wineprefix \
+    WINEDEBUG=-all \
+    WINEDLLOVERRIDES=mscoree=d
+RUN wineboot --init 2>/dev/null || true
+
+WORKDIR /src

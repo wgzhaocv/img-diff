@@ -15,12 +15,26 @@ use std::path::PathBuf;
 /// 先に `canonicalize` する（失敗時は原値で続行＝best-effort）。
 pub fn bundle_root() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+    let exe = strip_verbatim(std::fs::canonicalize(&exe).unwrap_or(exe));
     let bin = exe.parent()?;
     if bin.file_name()? != "bin" {
         return None;
     }
     Some(bin.parent()?.to_path_buf())
+}
+
+/// Windows の `canonicalize` が返す `\\?\` 前置き（verbatim path）を剥がす。
+///
+/// **この道は `VIPSHOME` として libvips（C）へ渡る。** libvips は `g_build_filename` で
+/// 素直に繋ぐだけなので `\\?\C:\...` を解釈できず、モジュール置き場を見失う
+/// ＝ **HEIC が「未対応の形式」になる**（wine 上で実際にそうなった）。
+/// verbatim でなくなることで長い道の上限（260 文字）が戻るが、
+/// 同梱パッケージの置き場としては現実的な制約ではない。
+fn strip_verbatim(path: PathBuf) -> PathBuf {
+    match path.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
+        Some(rest) => PathBuf::from(rest),
+        None => path,
+    }
 }
 
 /// この CLI の Producer（app="cli"・バージョンは本クレート・vips 実体・ハッシュ手順）。
@@ -102,7 +116,8 @@ pub fn now_rfc3339() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::is_newer;
+    use super::{is_newer, strip_verbatim};
+    use std::path::PathBuf;
 
     #[test]
     fn newer_only_when_strictly_greater() {
@@ -112,6 +127,25 @@ mod tests {
         assert!(!is_newer("0.1.4", "0.1.4"));
         // 手元が先行している状態（プラットフォーム別リリースのずれ）で降格を勧めない。
         assert!(!is_newer("0.1.4", "0.1.5"));
+    }
+
+    /// Windows の `canonicalize` が返す `\\?\` 前置きを剥がす。
+    /// **剥がし忘れると HEIC が読めなくなる** —— この道は `VIPSHOME` として libvips（C）へ渡り、
+    /// あちらは verbatim path を解釈できないのでモジュール置き場を見失う（wine で実際に起きた）。
+    #[test]
+    fn verbatim_prefix_is_stripped() {
+        assert_eq!(
+            strip_verbatim(PathBuf::from(r"\\?\C:\imgdiff\bin\imgdiff.exe")),
+            PathBuf::from(r"C:\imgdiff\bin\imgdiff.exe")
+        );
+        // 前置きが無ければそのまま（unix の道は一切触らない）。
+        assert_eq!(
+            strip_verbatim(PathBuf::from("/opt/imgdiff/bin/imgdiff")),
+            PathBuf::from("/opt/imgdiff/bin/imgdiff")
+        );
+        // UNC（`\\?\UNC\server\share`）は**剥がさない** —— 素の `UNC\...` は道として成り立たない。
+        let unc = PathBuf::from(r"\\?\UNC\server\share\imgdiff\bin\imgdiff.exe");
+        assert_eq!(strip_verbatim(unc.clone()), PathBuf::from(r"UNC\server\share\imgdiff\bin\imgdiff.exe"));
     }
 
     #[test]
