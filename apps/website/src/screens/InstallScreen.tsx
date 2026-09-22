@@ -9,12 +9,11 @@ import { CopyBlock } from "@/components/CopyBlock";
 // インストーラ・リリースの実 URL。プレビルド配布は Windows と macOS(Apple Silicon)。Linux は未対応。
 const INSTALL_PS1_URL = "https://img-diff.static.tools.nextop.asia/install.ps1";
 const INSTALL_SH_URL = "https://img-diff.static.tools.nextop.asia/install.sh";
+// **両方とも `releases/latest` を指す。** v0.1.7 で Windows 版が揃い、正式リリースに
+// なったので、macOS だけタグを直指ししていた分岐は要らなくなった。
+// （tag を書き戻す場合は `scripts/check-release-pins.sh` が「ここの tag == パッケージの版」を
+//   毎回検査して止める。latest 追従なら tag が無いので素通りする。）
 const RELEASES_URL = "https://github.com/wgzhaocv/img-diff/releases/latest";
-// macOS 版は Windows 版より先行しているため pre-release（= `releases/latest` に出てこない）。
-// タグを直接指す。**Windows 版が揃って正式リリースへ昇格したら RELEASES_URL に統一する。**
-// tag が古いまま発版すると無言で古い版を案内するので、scripts/package-macos.sh が
-// 「このファイルの tag == パッケージの版」を毎回検査して止める（public/install.sh も同様）。
-const MACOS_RELEASE_URL = "https://github.com/wgzhaocv/img-diff/releases/tag/v0.1.7";
 
 type OS = "windows" | "macos" | "linux";
 const OS_TABS: { value: OS; label: string }[] = [
@@ -111,7 +110,7 @@ export function InstallScreen() {
                 。それ以外では下のソースビルドを使ってください。
               </p>
               <div className="space-y-1.5">
-                <ReleaseZipLink href={MACOS_RELEASE_URL} />
+                <ReleaseZipLink href={RELEASES_URL} />
                 <p className="text-sm text-muted-foreground">
                   ブラウザで落とした zip には隔離属性が付くため、展開後に{" "}
                   <code className="font-mono text-foreground">

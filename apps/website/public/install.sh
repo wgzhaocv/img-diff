@@ -12,13 +12,18 @@ set -euo pipefail
 
 REPO='wgzhaocv/img-diff'
 TARGET='aarch64-apple-darwin'
-# 配布中の版。macOS 版が Windows 版より先行している間は pre-release なので、
-# `releases/latest` ではなくタグを直接指す。**Windows 版が揃って正式リリースへ昇格したら
-# BASE を https://github.com/$REPO/releases/latest/download に替えて TAG を消す。**
+# **最新版を追う。** v0.1.7 で Windows 版が揃い、正式リリース（pre-release でない）になったので、
+# タグ直指しをやめて `releases/latest` を見る（install.ps1 と同じ流儀）。
+# 特定の版を入れたいときだけ `IMGDIFF_TAG=v0.1.7` で上書きする。
 # （tag を固定したまま発版すると無言で古い版を配り続けるので、
-#   scripts/package-macos.sh が「ここの tag == パッケージの版」を毎回検査して止める。）
-TAG="${IMGDIFF_TAG:-v0.1.7}"
-BASE="https://github.com/$REPO/releases/download/$TAG"
+#   scripts/check-release-pins.sh が「ここの tag == パッケージの版」を毎回検査して止める。
+#   latest 追従なら tag が無いので検査は素通りする。）
+TAG="${IMGDIFF_TAG:-}"
+if [ -n "$TAG" ]; then
+  BASE="https://github.com/$REPO/releases/download/$TAG"
+else
+  BASE="https://github.com/$REPO/releases/latest/download"
+fi
 DEST_PARENT="${XDG_DATA_HOME:-$HOME/.local/share}"
 DEST="$DEST_PARENT/imgdiff"   # zip の先頭が imgdiff/ なので親へ展開するとここになる
 BIN_DIR="$DEST/bin"
