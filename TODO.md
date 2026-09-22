@@ -445,6 +445,22 @@ buffer を誰も読んでいないこと、寸法欄が両方空なら `planGeom
   **作り直した結果も両端で同じ dHash `1f1f8f0f0703838b`** ＝ 色度補間まで一致していることが
   初めて言えるようになった（mac 原生 / wasm / Windows の三者で確認）。
 
+**本番で通した（2026-09-22・新しい profile ＝ 初回訪問・空キャッシュ）**
+
+`https://img-diff.static.tools.nextop.asia/` —— 上げる前に
+`polar static archive img-diff --out before.zip`（14.8MB）で**退路を取ってから**配った
+（前回漏らした手順。`polar static` に版の履歴は無いので、これが唯一の戻し先）。
+
+- `crossOriginIsolated === true` / 配信物の資産ハッシュが手元の `dist` と一致
+  （`index-CdJw9XcJ.js` / `index-eWrdnS_k.css`）。
+- `/convert`: HEIC を開いて何も触らず **316ms で保存できる状態**（寸法欄は空・placeholder に 300）。
+  `300×500 · 4.4 KB · heic 変換なし（そのままコピー）`。
+- `/compare`: 4000×3000 の png 2 枚で **long task 0ms**。
+  SSIM 0.9634 / PSNR 26.67 / 差分割合 100.00% / ハミング 0（手元と同値）。
+- `/scan`: 240 枚 → 画像 240 / 重複グループ 40 / 重複 200 / 回収可能 241 KB・**所要 3040 ms**。
+  `createObjectURL` **6 回**・`<img>` 6 枚・「もっと見る（残り 10 グループ）」。
+- `/convert` ⇄ `/scan` の往復で「生成中…」は **0 回**。
+
 ### まだ塞げていない穴
 
 - **リリースがまだ**。Windows 版は交叉編譯で作れるようになった（上の C）が、**上げていない** ——
