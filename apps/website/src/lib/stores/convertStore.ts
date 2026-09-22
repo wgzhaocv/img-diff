@@ -17,10 +17,11 @@ import {
   normalizeOutFormat,
   parseDim,
   parseHexRgb,
-  planGeometry,
+  plannedOutput,
 } from "@/lib/convertPlan";
 import { PoolAbortError, poolRef } from "@/lib/workerPool";
 import { errText } from "@/lib/format";
+import { browserLocalStorage, dedupedStorage } from "@/lib/persistStorage";
 import { extOf } from "@/lib/imagePaths";
 
 // convert 画面の状態ストア（zustand）。scanStore と同じ作法:
@@ -242,32 +243,6 @@ export type ConvertState = {
   reset: () => void;
 };
 
-/** この設定でその画像がどうなるか（計画から。画素には触らない）。 */
-function plannedOutput(
-  options: ConvertOptions,
-  src: { width: number; height: number },
-): { noop: boolean; width: number; height: number } {
-  const plan = planGeometry({
-    srcW: src.width,
-    srcH: src.height,
-    width: options.width,
-    height: options.height,
-    fit: options.fit,
-    gravity: options.gravity,
-  });
-  const noop = plan.kind === "noop";
-  switch (plan.kind) {
-    case "noop":
-      return { noop, ...src };
-    case "cover":
-      return { noop, width: plan.crop.width, height: plan.crop.height };
-    case "contain":
-      return { noop, width: plan.embed.width, height: plan.embed.height };
-    default:
-      return { noop, width: plan.width, height: plan.height };
-  }
-}
-
 /**
  * **プレビューを作り直すべき入力**の同一性。これが変わらなければ結果は 1 バイトも変わらない。
  *
@@ -452,12 +427,22 @@ export const useConvertStore = create<ConvertState>()(
 
         const srcFormat = extOf(src.path);
         const key = previewKey(state);
+        // **同じ鍵に成功した答えが既に在るなら作り直さない。** `ConvertPreview` の effect は
+        // mount でも走るので、これが無いと画面を往復するたびに変換 1 回ぶんを丸ごと払う。
+        // **誤りの側（`previewError`）では飛ばさない** —— 中断（プール破棄）もそこに記録されるので、
+        // 飛ばすと「中断しました」のまま二度と復帰しなくなる。
+        if (state.preview?.key === key) {
+          // 成功した絵と古い理由が同じ鍵で同居し得る（catch は `preview` を消さない）。
+          // 作り直さないと決めた以上、ここで理由の方を落とす。
+          if (state.previewError?.key === key) set({ previewError: null });
+          return;
+        }
+        // **原寸から導いた計画は 1 回だけ作る。** 「止めるか」と「素通しするか」が同じ物を見ることで、
+        // 二つの判断がズレようが無くなる（ズレていたのがこの直前までの姿）。
+        const planned =
+          state.info.width > 0 ? plannedOutput(resolved.options, state.info) : undefined;
         // 書けない・大きすぎるなら試さずに理由を出す。
-        const reason = cannotWriteReason(
-          resolved.options,
-          srcFormat,
-          state.info.width > 0 ? plannedOutput(resolved.options, state.info) : undefined,
-        );
+        const reason = cannotWriteReason(resolved.options, srcFormat, planned);
         if (reason) {
           set({ previewRendering: false, previewError: { key, message: reason } });
           return;
@@ -469,7 +454,13 @@ export const useConvertStore = create<ConvertState>()(
         set({ previewRendering: true, previewError: null });
         try {
           const format = normalizeOutFormat(resolved.options.format ?? srcFormat);
-          const out = await convertSource(src, resolved.options, pool.get(), mimeOf(format));
+          const out = await convertSource(
+            src,
+            resolved.options,
+            pool.get(),
+            mimeOf(format),
+            planned,
+          );
           if (gen !== sourcesGen) return; // 選び直された後に返ってきた結果は捨てる
           // 素通しは寸法を返さない（デコードしていない）ので、取得時の原寸を使う。
           const info = get().info;
@@ -536,27 +527,9 @@ export const useConvertStore = create<ConvertState>()(
     {
       name: "imgdiff-convert",
       version: 1,
-      // 保存できない環境でも**画面は動き続ける**こと。
-      // createJSONStorage は「localStorage を取れない」場合は面倒を見てくれるが、
-      // **書き込みが投げる**場合（Quota 超過・SecurityError）は素通しする。zustand は
-      // set のたびに保存するので、そこで投げると操作ごと巻き添えになる。
-      storage: createJSONStorage(() => ({
-        getItem: (k) => localStorage.getItem(k),
-        setItem: (k, v) => {
-          try {
-            localStorage.setItem(k, v);
-          } catch {
-            // 設定が次回に残らないだけ。今の操作は続行する。
-          }
-        },
-        removeItem: (k) => {
-          try {
-            localStorage.removeItem(k);
-          } catch {
-            // 同上。
-          }
-        },
-      })),
+      // 保存できない環境でも**画面は動き続ける**こと、そして**同じ物を二度書かない**こと。
+      // どちらも `dedupedStorage` が面倒を見る（理由はそちらの説明に書いてある）。
+      storage: createJSONStorage(() => dedupedStorage(browserLocalStorage)),
       // 残すのは再利用できる設定だけ。入力 / 結果 / サムネは保存しない。
       partialize: (s) => ({ form: rememberedForm(s.form) }),
       // **既定の merge は浅い**ので、これが無いと `form` ごと差し替わり、

@@ -104,6 +104,176 @@
 - **やらないと判断**: WebCodecs `ImageDecoder`、応用層の SharedArrayBuffer、
   `WebAssembly.Module` の共有（常駐メモリは減らない）。
 
+### Codex 性能レビュー（gpt-6-astra/high・2026-09-22）— **未実測の提案。着手前に自分で測る**
+
+**この節の位置づけ**: 読んだのは codex（只読・書き込み無し）で、**走らせた計測は 1 つも無い**。
+数字は「バイト量からの導出」か「この仓库に既に在る実測の引用」のどちらかで、各項に区別を書いた。
+**Claude 側で核実したのは 4 点だけ** — 上節の実測記録（pool と `createImageBitmap`）/
+`lib/compare.ts:91` が主線程で採点している事 / `crates/core/src/compare.rs:32` の `ssim_window()` が
+窓ごとに読み直している事 / `workers/hash.worker.ts:51` が `decodeCanonical(bytes, true, …)` で
+サムネを無条件に作る事。**それ以外の行番号は未核実**（着手前に自分で開く）。
+
+**前提 — 先に計時口径を直す**: `lib/stores/scanStore.ts:76` の `runIndex` は `recluster()` を呼ぶ
+**前**に完了を記録している ⇒ クラスタリングと描画が計測に入っていない。
+**この状態では下の改修の効果を測れない。**
+
+**先にやる 4 つ**（収益/コスト順）:
+
+1. **compare を worker へ + 余計なサムネと二重コピーを消す**（上節「残り」の具体化）。
+   - `lib/compare.ts:84` の `compareFiles()` は `yieldToPaint()` で 1 回譲るだけで、
+     `compareScores` / `diffHighlight` は**主線程で同期**に走る。
+   - `decodeOne()` が使う `workers/hash.worker.ts:46` の `decodeFull()` は
+     `decodeCanonical(bytes, true, …)` = **サムネを無条件に作る**のに、`compareFiles()` はそれを
+     使っていない ⇒ `wantThumb` を引数にして compare では `false` を渡す。
+   - `compare_scores` と `diff_highlight` が**それぞれ** a/b を複製し、後者は出力も複製する。
+     12MP 1 組で約 **240MB** の束縛層コピー ⇒ a/b を 1 回で受けて scores と highlight を返す入口を
+     `crates/wasm` に足せば約 **144MB**。（**バイト量からの導出。時間は未実測**）
+   - 生成物 `src/wasm/imgdiff_wasm.js` を手で直さない（Rust 側の束縛を直して再生成）。
+   - 退路: 旧 `compareFiles()` の計算入口を機能切替として残す。transfer 後は元の buffer が
+     失効するので worker 側の所有権を明示する。**ビット一致は保たれる**（関数も呼ぶ順も変えない）。
+
+2. **SSIM を厳密な滑動和にする**。`crates/core/src/compare.rs:32` の `ssim()` は完全な 8×8 窓ごとに
+   `ssim_window()` を呼び、窓内 64 画素対を**毎回読み直している**（4000×3000 で約 1195 万窓 =
+   約 **7.65 億回**の窓内画素対アクセス）。縦 8 行の転がし和 → 横 8 列の滑動で 5 つの整数モーメントを持つ
+   （窓内平方和の最大は `64×255² = 4,161,600` で `u32` に収まる）。**f64 へ戻してからの
+   平均/分散/共分散/SSIM の式と加算順は変えない** ⇒ **ビット一致は保てる**。
+   `W<8 || H<8` の分岐は旧実装のまま。**旧実装を oracle にして逐位比較する**
+   （乱数画像 / 定数画像 / 反相関画像 / 細長い画像）。
+   **「数倍（3〜10 倍）」は検証目標であって実測ではない。compare 全体が 64 倍になる訳ではない。**
+
+3. **scan の二度手間デコードを消す**。`workers/hash.worker.ts:59` の `hashOne()` は全分解能 RGBA を
+   捨てるので、`lib/scan.ts:75` の `secondPassPixels()` が衝突メンバを**もう一度デコード**する。
+   1 巡目で pixel SHA 候補（32 バイトだけ保持・全画像は持たない）を作り、バケツ確定後に
+   衝突メンバだけ `pixelSha256` へ投影する（CLI の `crates/cli/src/pipeline.rs:28`
+   `decode_and_hash()` と同じ作法）。**常に得とは限らない**: 再デコード+白平坦化を D、
+   画素ダイジェストを H、候補比率を p とすると、今が `D + p(D+H)`・改修後が `D+H` ⇒
+   **`p > H/(D+H)` のときだけ得**。重複の多いアルバムは得、衝突がほぼ無いなら digest 1 回分の損。
+   ビット一致は不変（出力の剪定は従来どおり要る）。
+
+4. **IDB を小バッチにする**。`lib/scan.ts:224` の `scanFolder()` は 1 件ごとに `putHash()` +
+   `putThumb()` を同期待ちしている。約 50 件 / 100〜250ms でまとめる（サムネは別の best-effort 列）。
+   5000 枚で事務数は約 1/50 だが、**総時間の収益は保存が占める割合次第**（5% なら最大でも約 1.05 倍）。
+   DESIGN §5 が約 50 件の小バッチを既に許している。
+
+**問うた 3 つ（原生デコード / WebGPU / OPFS）— どれも第 1 巡ではない**:
+
+- **原生デコード（`ImageDecoder` / `createImageBitmap`）**: 上節の「やらないと判断」を**覆さない**。
+  判定層に入れられない理由が改めて 4 つ挙がった — JPEG の chroma upsampling の実装差 /
+  色管理は実装依存（`colorSpaceConversion:"none"` は vips の再現ではない）/ canvas の premultiply
+  丸めが core の整数式と一致しない / `resizeQuality:"high"` は Triangle の重み・標本・丸めを規定しない。
+  **dHash は厳密 `<` で比べるので 1 階調の差でビットが反転する。**
+  入れてよいのは**表示層**（独立プレビューの初回に vips 初期化を回避）と**予選層**
+  （並び替え・優先度付けのみ。正式な候補を落とすのには使えない）。
+  なお canonical の順は `decode → autorot → srgb → RGBA → 白平坦化 → Triangle で 9×8 → Rec.601 灰度 → dHash`
+  で、**先に灰度化してから縮めるのではない**（順を入れ替えても丸めで結果が動き得る）。
+- **WebGPU**: 値打ちが在るのは `CompareView` の `DiffCanvas()` = 差分図を 1 回上げて GPU に置いたまま
+  描き続ける形だけ。往復が回収点を決める（12MP = 96MB 上り + 48MB 下り、48MP = 384MB + 192MB）⇒
+  **≤1MP は CPU、4〜12MP は実測で交叉点を探す、12MP 超で連続再描画する物だけが候補**
+  （試験用の刻みであって確定値ではない）。**SSIM の正式値は GPU に載せられない（WGSL に f64 が無い）** —
+  近似プレビューなら可、ただし正式経路と**別物として隔離**する。GPU が出した値は hash キャッシュにも
+  clean にも入れない。WebGPU 無し / デバイス喪失 / シェーダ compile 失敗は CPU worker へ直に回退。
+- **OPFS**: **搬すべき物が今は無い**。`lib/db.ts:10` が持っているのは小さい `HashEntry` と
+  ディレクトリ handle と 256px サムネ Blob だけで、**全分解能 RGBA は元々永続化していない**
+  （12MP×5000 枚 = 240GB。持つべきでない）。効くのは搬送ではなく上の #4（バッチ化）。
+  OPFS が要るのは「大きい派生物を高頻度で使い回す」場合だけ（diff / 変換結果の LRU）。
+  **「数千枚の IDB 対 OPFS の実測差」は出せない** — この仓库にその計測が無く、只読制約では測れない。
+  TODO の 60 枚の数字は native CLI のもので、web の IDB の基準にならない。
+  併せて**キャッシュ鍵が弱い**: hash の失効条件 `(rootId,path,size,mtime,hashAlgo)` に
+  decoder / pipeline の版が無く、thumb は `(rootId,path)` だけで内容版が無い
+  （書き込みが失敗すると古い thumb を返し得る）。
+
+**この審査で訂正された事実**（前の要約が嘘だった所）:
+
+- **14.5MB は初回転送量ではない**。vips 本体 + 動的ライブラリ 3 つで約 11.90MB、libheif 1.42MB は
+  必要時のみ。ただし `workers/vips.ts:82` の `getVips()` は動的ライブラリ 3 つを**全部**初期化する。
+- **HEVC の HEIC は wasm-vips ではなく libheif-js が解く**（`workers/vips.ts:143` の `toSource()` が分流）。
+  AV1 の HEIF は vips のまま。
+- **JXL は走査に入っていない**（`lib/imagePaths.ts:24`）。変換の対応集合にだけ在る。
+- **golden が保証しているのは「同じ RGBA を入れたときの core の native/wasm ビット一致」**で、
+  端から端までのデコード一致ではない（SPEC §1 が範囲を限定し、`crates/wasm/src/lib.rs:231` の
+  `parity_vectors` は合成 RGBA から始まる）。HEIC は**画素バイトの約 29.9% が異なり最大差 11** で、
+  その夹具の dHash がたまたま一致しているだけ。**任意の HEIC へ一般化できない。**
+
+**そのほか（上の 4 つの後）**:
+
+- `screens/ScanScreen.tsx:44` は store 全体を購読している（progress を分解しなくても再描画が走る）⇒
+  フィールド selector にする。
+- `components/DuplicateGroups.tsx:44` は全メンバを描き、各 `Thumb` が即 `getThumb()` を呼ぶ
+  （`loading="lazy"` はこの IDB 問い合わせを遅らせない）⇒ 仮想化（DESIGN §3 で想定済み）。
+- `lib/scan.ts:179` は DFS 列挙 → 全 `getFile()` → hash の直列。`walkImages()` と `getRootHashes()`
+  は重ねられる。
+- **プール本数は下げない**（上節の実測）。`vips.concurrency(1)` も維持。vips の常駐には 60 秒の
+  遊休回収が既に在る。直せるのは `workers/vips.ts:209` の「サムネ不要の HEIC 早期 return」に残る
+  余計な `getVips()` 呼びの方。
+- **O(N²) は union-find ではなく対探索**（`crates/core/src/cluster.rs:99` の `group_perceptual()` /
+  `build_group()` が全対比較）⇒ 同一 dHash を先に畳んで、探索を「異なる hash の個数 U」へ落とす。
+
+### 三画面の性能修正（gpt-6-astra が挙げた未記載 8 件のうち 6 件）— 済・2026-09-22
+
+**上節の未実測リストとは別**。codex（`gpt-6-astra`/high・只読）に三画面を読ませて「TODO に無い物」を
+挙げさせた 8 件から、6 件を直した。**実測は実ブラウザ（agent-browser + dev server）で前後を取った。**
+
+**いちばんの収穫は性能ではなくバグ**: `/convert` で **HEIC を開いて何も変えずに保存すると
+`heic には書き出せません` で落ちていた**（SPEC §5.4 規則 4 は「元のバイト列をそのまま保存させる」と
+明記している）。原因は `prefillDimensions()` が原寸を寸法欄へ入れること —— 旧 `isPassThrough()` は
+「寸法欄が空」を要求するので、既定の操作が主線程の短絡を外れ、ワーカーの `saveSpec` で投げていた。
+⇒ `isPassThrough` を消して **`passesThrough(options, srcFormat, planned?)` 1 本**にし、
+`convertSource`（主線程）/ `cannotWriteReason`（画面）/ `applyConvert`（`workers/vips.ts`）の
+**三者が同じ関数を通る**ようにした。`plannedOutput()` は `convertStore` から `convertPlan` へ移した。
+
+**実測（前 → 後）**:
+
+- HEIC を何も触らず保存: **エラー・保存リンク無し → `300×500 · 4.4 KB · heic 変換なし（そのままコピー）`**
+  （4480 バイト＝原寸大が落ちる）。
+- **4000×3000 の JPEG を何も触らず: 791ms → 804ms。速度の収益は無い。**
+  `applyConvert` の `newFromBuffer` は遅延評価で、noop では画素を触らないため。
+  **「全部読んで全部デコードしていた」という当初の見立ては実測で否定された。** 省けたのは
+  8.6MB の `arrayBuffer()` 1 回とワーカー往復 1 回だけ。
+- `/convert` ⇄ `/scan` の往復: **「生成中…」を見た回数 7 → 0**（`renderPreview` に鍵の早切り）。
+- `/scan` ⇄ `/convert` の往復: **`recluster` の実行回数 1 → 0**（`clusterIfNeeded` に鍵の記録）。
+- 省いた `recluster` 1 回の実費（node・実 wasm）: **N=5000 perceptual 10.5ms / exact 5.7ms。**
+  **効果は小さい** —— 12.5M 対の hamming は popcount なので元々速い。
+
+**残る 4 件（性能というより正しさ）**:
+
+- `runBounded()`（`lib/scan.ts`）に**呼び出しごとの停止旗と本物の完了境界**。1 本が落ちた後も
+  残りが全件を読み続けていた。`Promise.all` は最初の拒否で返るので、**全員が降りるまで待ってから
+  投げる**ようにした（境界が無いと、次のスキャンが始まった後に前のスキャンの runner が
+  進捗を書いたり `putHash` を完了したりし得る）。
+- `walkImages()` が `{ files, unreadableDirs }` を返し、`scanFolder` は**読めなかったフォルダの下を
+  GC しない**（祖先を根まで辿る。文字列の前方一致ではないので `a/b` が `a/bb` を巻き込まない）。
+  以前の「空列挙なら GC しない」番人はこれで置き換えた。
+- `scanStore`: `recluster` を `clusterIfNeeded()`（store を書かず結果を返す）に割り、
+  `result` の差し替えを `replaceResult()` 1 箇所へ。**`groups` は result から導く物なので一緒に捨てる**
+  （削除直後にクラスタリングが失敗すると、消えた path が一覧に残り、もう一度削除を押すと
+  既に消えた物を消そうとしていた）。`runIndex` は `groups` と `elapsedMs` を**同じ 1 回の更新**で書く
+  （`ScanScreen` は store 全体を購読しているので、分けると一覧が丸ごと描き直される）。
+  併せて**計時口径を直した**（`recluster` を待ってから `elapsedMs` を確定する）。
+- `lib/persistStorage.ts` の `dedupedStorage()` で `persist` の保存先を包んだ。**速度の話ではない**
+  （`JSON.stringify` は包みの外で走るので、省けるのは 200 バイトの `setItem` だけ）。
+  値打ちは投げても画面を止めないこと。**同期の保存先しか受けないことを型で縛った。**
+
+**やらないと判断した 2 件**: codex #4「選び直しが排队中の仕事を取り消さない」（convert のプールは
+1 本で収益が小さい）/ #7「compare の片側再デコード」（12MP で 48MB の常駐が要る。codex 自身が最低に置いた）。
+
+**レビュー 2 巡で覆った設計判断**（記録として残す）:
+
+- simplify の altitude が「GC は白名単（読めたフォルダだけ消してよい）にせよ、黒名単は fail open」と
+  言ったので一度そうしたが、**codex が具体的な漏れを見つけた** —— **フォルダごと消された / 名前を
+  変えられた場合、その配下のキャッシュが永久に残る**（消えたフォルダは当然「読めたフォルダ」に
+  入らないので守られ続ける）。白名単が防ぐと言っていたのは「投げずに静かに終わる列挙」という
+  仮定の話だったので、**具体的な漏れの方を取って黒名単へ戻した**。
+- reuse と altitude の両方が「`workers/vips.ts` が述語を再実装している」と指摘。
+  あちらは `convertPlan` を既に import しているので、**ワーカーも同じ関数を通す**ようにした
+  （それまで「三者が同じ物を見る」と書いたコメントは嘘だった）。
+
+**根本原因として残っているもの（別 commit）**: `prefillDimensions()` が原寸を
+**「利用者が指定した寸法」と同じ欄**へ書くこと。ここから既に 3 つの症状が出ている ——
+今回の素通しバグ / `renderPreview` が原寸の到着を待たねばならないこと（鍵が変わるので
+「選んだ直後だけ倍遅い」・実測 4.2s → 8.5s）/ `infoGen` という世代変数そのもの。
+直すなら**原寸は placeholder として見せ、`form.width` は利用者が打つまで空のまま**にする。
+`resolveOptions` / `previewKey` / 縦横比の錠 / 寸法欄の描画に触るので、UI の意味が変わる別件。
+
 ### まだ塞げていない穴
 
 - **SPEC §1 が要求する固定画像の golden 夹具**は HEIC のぶんだけ（`tests/fixtures/sample.heic` +

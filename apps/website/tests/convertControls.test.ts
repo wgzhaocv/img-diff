@@ -16,6 +16,7 @@ import {
 } from "@/lib/convertControls";
 import { planGeometry, saveSpec } from "@/lib/convertPlan";
 import type { ConvertFit } from "schema";
+import { convertOptions } from "./options";
 
 // UI.md §6.1「今の条件で効かない控件は出さない」の判定表。
 // 各行の根拠は実装側（workers/vips.ts の applyConvert 分岐・convertPlan.ts の saveSpec）にある。
@@ -251,17 +252,9 @@ describe("よく使う幅の早押し（presetWidths）", () => {
 describe("読めるが書けない形式は、押す前に理由を出す", () => {
   // 1 枚しか扱わないので、判定は `cannotWriteReason` 1 つに寄っている
   // （バッチだった頃の `validate` は「全件が駄目なときだけ止める」役だった）。
-  const opts = (patch: Partial<ConvertOptions> = {}): ConvertOptions => ({
-    width: 100,
-    height: 100,
-    fit: "cover",
-    gravity: "center",
-    background: null,
-    format: null,
-    quality: 80,
-    forceReencode: false,
-    ...patch,
-  });
+  // この節は「寸法を指定した状態」の判定を見るので、既定に寸法を入れておく。
+  const opts = (patch: Partial<ConvertOptions> = {}): ConvertOptions =>
+    convertOptions({ width: 100, height: 100, ...patch });
 
   it("heic のまま出そうとすると理由を返す（wasm-vips は heic を書けない）", () => {
     expect(cannotWriteReason(opts(), "heic")).toMatch(/書き出せません/);

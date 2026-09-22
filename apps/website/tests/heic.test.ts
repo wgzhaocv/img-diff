@@ -5,6 +5,8 @@ import { beforeAll, describe, expect, it } from "vite-plus/test";
 import type { ConvertOptions } from "schema";
 import { applyConvert, applyInfo, type DecodeSource, type Vips } from "@/workers/vips";
 import { applyHeicDecode, isAv1Heif, type HeifDecoder, type LibHeif } from "@/workers/heic";
+import { passesThrough, plannedOutput, saveSpec } from "@/lib/convertPlan";
+import { convertOptions } from "./options";
 
 // HEVC の HEIC は wasm-vips が読めないので補助デコーダ（libheif-js）で補う。SPEC §1。
 // 夹具は合成画像から作った実ファイル（SPEC §1「固定画像 + 既知 dHash」の第一歩）。
@@ -18,6 +20,10 @@ import { applyHeicDecode, isAv1Heif, type HeifDecoder, type LibHeif } from "@/wo
 const heicBytes: ArrayBuffer = new Uint8Array(
   readFileSync(fileURLToPath(new URL("./fixtures/sample.heic", import.meta.url))),
 ).buffer;
+/** AV1 入りの HEIF（こちらは wasm-vips 側が読める）。 */
+const av1Bytes: ArrayBuffer = new Uint8Array(
+  readFileSync(fileURLToPath(new URL("./fixtures/av1.heic", import.meta.url))),
+).buffer;
 /** 記録した復号結果（libheif-js 1.23.2）。変わったら「なぜ変わったか」を必ず確かめること。 */
 const RGBA_SHA256 = "8a0f18af5fbcc6b8d964dd5af4b3b46aa1fc055dd1c7b8c00e493c3ae244439d";
 
@@ -25,16 +31,7 @@ let vips: Vips;
 let source: Extract<DecodeSource, { kind: "rgba" }>;
 let decoder: HeifDecoder;
 
-const defaults: ConvertOptions = {
-  width: null,
-  height: null,
-  fit: "cover",
-  gravity: "center",
-  background: null,
-  format: null,
-  quality: 80,
-  forceReencode: false,
-};
+const defaults: ConvertOptions = convertOptions();
 
 /** 出力バイト列を読み直して、実際に何が書かれたかを見る。 */
 function inspect(out: Uint8Array): { width: number; height: number; loader: string } {
@@ -186,5 +183,42 @@ describe("中身が AV1 の HEIF は本体（wasm-vips）に回す", () => {
       "heic",
     );
     expect(inspect(r.out).width).toBeGreaterThan(0);
+  });
+});
+
+describe("読めるが書けない形式は、主線程でしか救えない（SPEC §5.4 規則 4）", () => {
+  // ワーカーには救えない（理由は `lib/convert.ts` の `convertSource` に書いてある）。
+  it("heic は書き出せない（ワーカーの入口で止まる）", () => {
+    expect(saveSpec("heic", 80)).toBeNull();
+  });
+
+  it("原寸を寸法欄に入れた状態でも「素通しする」と判定できる", () => {
+    // 画面は原寸が届いた時点で寸法欄を埋める（`prefillDimensions`）。その状態を再現する。
+    const info = applyInfo(vips, source); // 補助デコーダが解いた画素から原寸を取る
+    expect([info.width, info.height]).toEqual([300, 500]);
+    const options: ConvertOptions = {
+      ...defaults,
+      width: info.width,
+      height: info.height,
+      format: null,
+    };
+    // ここが false に戻ると、heic の「何も変えない保存」がまたエラーになる。
+    expect(passesThrough(options, "heic", plannedOutput(options, info))).toBe(true);
+  });
+
+  it("AV1 の heic（vips が読める方）も同じ判定になる", () => {
+    expect(isAv1Heif(av1Bytes)).toBe(true);
+    const info = applyInfo(vips, { kind: "encoded", bytes: av1Bytes });
+    const options: ConvertOptions = {
+      ...defaults,
+      width: info.width,
+      height: info.height,
+      format: null,
+    };
+    expect(passesThrough(options, "heic", plannedOutput(options, info))).toBe(true);
+    // 画質を明示したら素通ししない ⇒ 書けないので、画面は押す前に理由を出す側へ回る。
+    expect(
+      passesThrough({ ...options, forceReencode: true }, "heic", plannedOutput(options, info)),
+    ).toBe(false);
   });
 });

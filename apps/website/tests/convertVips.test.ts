@@ -10,6 +10,8 @@ import type { ConvertOptions } from "schema";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { applyConvert, applyInfo, type DecodeSource, type Vips } from "@/workers/vips";
+import { passesThrough, plannedOutput } from "@/lib/convertPlan";
+import { convertOptions } from "./options";
 
 /** 符号化済みバイト列を入力の形にする（HEIC 以外はこちら）。 */
 const enc = (bytes: ArrayBuffer): DecodeSource => ({ kind: "encoded", bytes });
@@ -66,16 +68,8 @@ beforeAll(async () => {
   widePng = makePng(v, 100, 50);
 }, 60_000);
 
-const defaults: ConvertOptions = {
-  width: null,
-  height: null,
-  fit: "cover",
-  gravity: "center",
-  background: "ffffff",
-  format: null,
-  quality: 80,
-  forceReencode: false,
-};
+// この試験は背景が効く経路（contain の余白）を多く通るので、既定を白にしておく。
+const defaults: ConvertOptions = convertOptions({ background: "ffffff" });
 
 /**
  * 出力バイト列を**読み直して**寸法・バンド数・ローダ名を見る。
@@ -374,15 +368,16 @@ describe("入力一覧の情報取得（applyInfo）", () => {
   });
 });
 
+/** 1600×1200・orientation=6 の実ファイル（autorot 後は 1200×1600）。 */
+const rotated: ArrayBuffer = new Uint8Array(
+  readFileSync(fileURLToPath(new URL("./fixtures/rotated.jpg", import.meta.url))),
+).buffer;
+
 describe("EXIF の向きが付いた実ファイル", () => {
   // **合成 PNG だけで試験していると気づけない穴がある。** 実際、読み込みを
   // `[access=sequential]` にしたとき、向きの付いた jpeg が**すべて**落ちるようになったのに
   // 合成夹具は素通しした（`autorot` が非単調に読むため。小さい画像だと行キャッシュに収まって
   // 再現もしない）。1600×1200・orientation=6 の実ファイルで、その経路を踏み続ける。
-  const rotated: ArrayBuffer = new Uint8Array(
-    readFileSync(fileURLToPath(new URL("./fixtures/rotated.jpg", import.meta.url))),
-  ).buffer;
-
   it("向きを適用して縦横が入れ替わる", () => {
     const r = applyConvert(vips, enc(rotated), { ...defaults, format: "png" }, "jpg");
     const got = inspect(r.out);
@@ -414,5 +409,85 @@ describe("EXIF の向きが付いた実ファイル", () => {
   it("入力一覧の情報も取れる", () => {
     const info = applyInfo(vips, enc(rotated));
     expect([info.width, info.height]).toEqual([1200, 1600]);
+  });
+});
+
+// --- 主線程の「素通しするか」の予測 vs ワーカーの実際 -----------------------------------------
+//
+// **この 2 つが食い違うと必ずどちらかが壊れる。** 予測が甘ければ変換すべき物を素通しさせ、
+// 辛ければ「何も変えない」指定のために全部読んで全部デコードする（実際そうなっていた ——
+// `prefillDimensions` が原寸を寸法欄に入れるので、`isPassThrough` が永久に false を返していた）。
+//
+// 予測側は画面がやるのと同じ順に通す: `applyInfo` の原寸 → `plannedOutput` → `passesThrough`。
+
+describe("素通しの予測が、実際の変換と一致する", () => {
+  /**
+   * 原寸から `passesThrough` の予測を出し、`applyConvert` の実際と突き合わせる。
+   * `info` は呼び出し側が持つ —— `applyInfo` は**ヘッダ読みではなく本物のデコード + 符号化**
+   * （`thumbnailBuffer`）なので、組み合わせごとに取り直すと試験だけで数百 ms 増える。
+   */
+  function agree(
+    bytes: ArrayBuffer,
+    info: { width: number; height: number },
+    options: ConvertOptions,
+    srcFormat: string,
+    label: string,
+  ) {
+    const planned = plannedOutput(options, info);
+    const predicted = passesThrough(options, srcFormat, planned);
+    const actual = applyConvert(vips, enc(bytes), options, srcFormat);
+    expect(predicted, `${label}: 予測と実際`).toBe(actual.passedThrough === true);
+    if (predicted) {
+      // 素通しと言った以上、**出力は入力とバイト一致**でなければならない。
+      const same = Buffer.compare(Buffer.from(actual.out), Buffer.from(new Uint8Array(bytes)));
+      expect(same, `${label}: バイト一致`).toBe(0);
+    }
+  }
+
+  it("寸法 × 形式 × 再符号化の組み合わせで食い違わない", () => {
+    // `rotated.jpg` を必ず入れる —— **ヘッダの寸法と autorot 後の寸法が違う唯一の入力**なので、
+    // `applyInfo` と `applyConvert` の寸法がずれた瞬間にここが落ちる。
+    const inputs: [string, ArrayBuffer, string][] = [
+      ["squarePng", squarePng, "png"],
+      ["widePng", widePng, "png"],
+      ["rotated.jpg", rotated, "jpg"],
+    ];
+    for (const [name, bytes, srcFormat] of inputs) {
+      const info = applyInfo(vips, enc(bytes));
+      const dims: [number | null, number | null][] = [
+        [null, null],
+        [info.width, info.height],
+        [info.width - 1, info.height - 1],
+        [info.width + 1, info.height + 1],
+      ];
+      for (const [width, height] of dims) {
+        for (const format of [null, srcFormat, "png"]) {
+          for (const forceReencode of [false, true]) {
+            agree(
+              bytes,
+              info,
+              { ...defaults, width, height, format, forceReencode },
+              srcFormat,
+              `${name} ${width}x${height} → ${format ?? "同じ"}${forceReencode ? " (再符号化)" : ""}`,
+            );
+          }
+        }
+      }
+    }
+  });
+
+  it("原寸を寸法欄に入れただけでは変換にならない（この巡で直した所）", () => {
+    const info = applyInfo(vips, enc(squarePng));
+    const options: ConvertOptions = {
+      ...defaults,
+      width: info.width,
+      height: info.height,
+      format: null,
+    };
+    // **原寸を渡さないとここで取りこぼす**（寸法欄が空でないので）。
+    expect(passesThrough(options, "png")).toBe(false);
+    // 原寸から計画を作れば、効かない寸法指定だと分かる。
+    expect(passesThrough(options, "png", plannedOutput(options, info))).toBe(true);
+    expect(applyConvert(vips, enc(squarePng), options, "png").passedThrough).toBe(true);
   });
 });

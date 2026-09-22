@@ -4,7 +4,7 @@ import { HashPool } from "@/lib/workerPool";
 import { gcOrphans, getRootHashes, HASH_ALGO, putHash, putThumb, type HashEntry } from "@/lib/db";
 import { webpBlob } from "@/lib/convertControls";
 import { resolveRoot, walkImages } from "@/lib/fsaccess";
-import { compareCodepoint, extOf, isScannableImage, uniquePath } from "@/lib/imagePaths";
+import { compareCodepoint, dirOf, extOf, isScannableImage, uniquePath } from "@/lib/imagePaths";
 
 // CLI `util.rs::normalize_ext` と揃える（producer 間で ImageRecord.format を一致させる）。
 const FORMAT_ALIAS: Record<string, string> = { jpg: "jpeg", tif: "tiff" };
@@ -50,22 +50,56 @@ function entryToRecord(e: HashEntry): ImageRecord {
   };
 }
 
+/**
+ * その path が「最後まで読めなかったフォルダ」の下に在るか。**掃除の対象から外すために使う。**
+ *
+ * 祖先を根まで辿る（文字列の前方一致ではなく**フォルダ単位**で見るので、`a/b` が `a/bb` を
+ * 巻き込むことが無い）。根の失敗は `""` なので、そのときは必ず最後に当たる。
+ */
+export function underUnreadable(path: string, unreadable: Set<string>): boolean {
+  if (unreadable.size === 0) return false;
+  for (let dir = dirOf(path); ; dir = dirOf(dir)) {
+    if (unreadable.has(dir)) return true;
+    if (dir === "") return false;
+  }
+}
+
 /// items を最大 limit 本の runner で処理する。狙いは**同時実行制限ではなくメモリ**:
 /// 各 runner は 1 件ずつ読み込むので、全ファイルのバイトを一度に持たない
 /// （ワーカーの同時実行は HashPool 側が絞る。limit=poolSize で歩調を合わせる）。
-async function runBounded<T>(
+export async function runBounded<T>(
   items: T[],
   limit: number,
   task: (item: T, index: number) => Promise<void>,
 ): Promise<void> {
   let next = 0;
+  // **この呼び出しだけの旗。** `secondPassPixels` は 2 つの呼び出し元が通る共有 seam なので、
+  // モジュール変数にすると別の実行を巻き込む。
+  let failed = false;
+  let firstError: unknown;
   async function worker(): Promise<void> {
-    while (next < items.length) {
-      const i = next++;
-      await task(items[i], i);
+    try {
+      while (next < items.length && !failed) {
+        const i = next++;
+        await task(items[i], i);
+      }
+    } catch (e) {
+      // **最初の失敗で新規の取り出しを止める。** 止めないと、呼び出し側が既に諦めた後も
+      // 残りの runner が残り全件を読み込み続ける（1 件ごとに `arrayBuffer()` を払って捨てる）。
+      // ここでは投げ直さず記録だけする —— 投げると `Promise.all` がそこで返ってしまい、
+      // 下の「全員が降りるまで待つ」が成り立たない。
+      if (!failed) {
+        failed = true;
+        firstError = e;
+      }
     }
   }
+  // **全員が降りるまで待ってから投げる。** ここが「この呼び出しの仕事は終わった」という境界で、
+  // 境界が無いと、呼び出し側が失敗を受けて次のスキャンを始めた後に、前のスキャンの runner が
+  // 進捗を書いたり `putHash` を完了したりし得る（並列上限も一時的に超える）。
+  // 旗を見るのは次を取る所なので、待つのは走行中の最大 `limit - 1` 件だけ。
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  if (failed) throw firstError;
 }
 
 /// 2 パス目（SPEC §2.1）。dHash 衝突バケット（メンバ≥2）のメンバのみ pixelSha256 を持つよう
@@ -177,19 +211,22 @@ export async function scanFolder(
   onProgress: (p: ScanProgress) => void,
 ): Promise<ScanResult> {
   const root = await resolveRoot(dirHandle);
-  const files = await walkImages(dirHandle, isScannableImage);
+  const { files, unreadableDirs } = await walkImages(dirHandle, isScannableImage);
   const cached = await getRootHashes(root.rootId);
 
   // GC: 列挙に無くなった path（OS 側で削除/移動）のキャッシュを掃除して stale を残さない（DESIGN §5）。
   // present は「開けたか」ではなく「列挙に在ったか」で見る（getFile 失敗の既存ファイルを誤って GC しない）。
-  // 空列挙（権限喪失や root ごと読めない等）は信用せず GC しない＝全キャッシュを消さない安全ガード。
-  if (files.length > 0) {
-    const present = new Set(files.map((f) => f.path));
-    await gcOrphans(
-      root.rootId,
-      [...cached.keys()].filter((p) => !present.has(p)),
-    );
-  }
+  //
+  // **確かめられていないフォルダの下は消さない。** 読めなかっただけのフォルダを「無くなった」と
+  // 読むと、次に読めたときに hash もサムネも作り直しになる（読める兄弟が 1 つ在れば起きていた）。
+  // 根ごと読めなければ `""` が入るので全部が守られる ＝ 以前の「空列挙なら GC しない」安全ガードを、
+  // フォルダの粒度へ置き換えた形。**逆に、祖先が全部読めていれば消えた物は消えたと言える**
+  // （フォルダごと消された場合もここで掃除される）。
+  const present = new Set(files.map((f) => f.path));
+  await gcOrphans(
+    root.rootId,
+    [...cached.keys()].filter((p) => !present.has(p) && !underUnreadable(p, unreadableDirs)),
+  );
 
   const fileByPath = new Map<string, File>();
   const entryByPath = new Map<string, HashEntry>();

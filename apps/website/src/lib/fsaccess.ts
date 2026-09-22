@@ -106,27 +106,52 @@ export async function resolveRoot(dirHandle: FileSystemDirectoryHandle): Promise
   return entry;
 }
 
+/**
+ * 列挙の結果。**「入ったが最後まで読めなかったフォルダ」を一緒に返すのが要点。**
+ *
+ * 一覧だけを返すと、呼び出し側は「その path が無い」と「その path が見えていない」を区別できない。
+ * 区別できないまま掃除すると、一時的に読めなかっただけのフォルダのキャッシュまで消える。
+ *
+ * **「読めた所」ではなく「読めなかった所」を返す。** 白名単（読めたフォルダだけを掃除可とする）も
+ * 試したが、**フォルダごと消された / 名前を変えられた場合にその配下が永久に掃除されない**
+ * （消えたフォルダは当然「読めたフォルダ」に入らないので、いつまでも守られてしまう）。
+ * 黒名単なら、祖先のどれも失敗していない ＝ 経路上すべてを最後まで見られた ＝
+ * その path はもう無い、と正しく言える。
+ */
+export type WalkResult = {
+  files: EnumeratedFile[];
+  /**
+   * **入ったのに最後まで列挙できなかった**ディレクトリのルート相対パス
+   * （**その下は丸ごと「確かめられていない」**）。根そのものが読めなければ `""` が入る。
+   */
+  unreadableDirs: Set<string>;
+};
+
 /// dirHandle 配下の画像ファイルを再帰列挙する（ルート相対パス + handle）。
-/// アクセスできないサブディレクトリは握り潰してスキップし、全体は止めない（DESIGN §6・CLI と同方針）。
+/// アクセスできないサブディレクトリはスキップして全体は止めない（DESIGN §6・CLI と同方針）が、
+/// **どこを飛ばしたかは握り潰さず返す**（呼び出し側が掃除の対象から外せるように）。
 export async function walkImages(
   dir: FileSystemDirectoryHandle,
   isImage: (name: string) => boolean,
-): Promise<EnumeratedFile[]> {
-  const out: EnumeratedFile[] = [];
+): Promise<WalkResult> {
+  const files: EnumeratedFile[] = [];
+  const unreadableDirs = new Set<string>();
   async function recurse(handle: FileSystemDirectoryHandle, prefix: string): Promise<void> {
     try {
       for await (const [name, child] of handle.entries()) {
         const path = prefix ? `${prefix}/${name}` : name;
         if (child.kind === "file") {
-          if (isImage(name)) out.push({ path, handle: child });
+          if (isImage(name)) files.push({ path, handle: child });
         } else {
           await recurse(child, path);
         }
       }
     } catch {
-      // このディレクトリは列挙できないのでスキップ（権限/失効等）。
+      // このディレクトリは最後まで列挙できなかった（権限/失効等）。
+      // **途中まで拾えた分は捨てない** —— 在ることが分かった物は在る。
+      unreadableDirs.add(prefix);
     }
   }
   await recurse(dir, "");
-  return out;
+  return { files, unreadableDirs };
 }

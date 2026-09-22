@@ -65,6 +65,15 @@ export function baseNameOf(path: string): string {
 }
 
 /** scan の対象か（CLI の既定 ext と同じ集合）。 */
+/**
+ * ルート相対パスの**親ディレクトリ**（`'/'` 区切り・ルート直下は空文字）。
+ * `scan` が「そのファイルが在ったフォルダを最後まで列挙できたか」を引くのに使う。
+ */
+export function dirOf(path: string): string {
+  const at = path.lastIndexOf("/");
+  return at < 0 ? "" : path.slice(0, at);
+}
+
 export function isScannableImage(name: string): boolean {
   return SCANNABLE_EXTS.has(extOf(name));
 }

@@ -11,6 +11,7 @@ import {
   effectiveBackground,
   normalizeOutFormat,
   parseHexRgb,
+  passesThrough,
   planGeometry,
   saveSpec,
 } from "@/lib/convertPlan";
@@ -399,15 +400,19 @@ export function applyConvert(
       gravity: options.gravity,
     });
 
-    // 寸法を指定していても、この画像には効かない（拡大要求など）ことがある。
-    // 出力形式も同じなら**再符号化せず元のバイト列を返す**（SPEC §5.4 規則 4）。
-    // 寸法はデコード済みなので、素通しでも正しい値を返せる。
-    // 素通しは**元のバイト列がある場合だけ**（補助デコーダ経由には元の符号化が無い）。
+    // 「何も変えない」なら**再符号化せず元のバイト列を返す**（SPEC §5.4 規則 4）。
+    // 判定は `passesThrough` が正本 —— 主線程（`convertSource`）と画面（`cannotWriteReason`）も
+    // 同じ関数を通るので、三者がズレようが無い。寸法はデコード済みなので正しい値を返せる。
+    //
+    // **ここだけが余分に見る条件**: 元のバイト列が手元に在るか。補助デコーダ経由（HEVC の HEIC）は
+    // `toSource` が生 RGBA に差し替えるので、返すべき「元の符号化」がこの場に残っていない。
     if (
       source.kind === "encoded" &&
-      !options.forceReencode &&
-      plan.kind === "noop" &&
-      outFormat === normalizeOutFormat(srcFormat)
+      passesThrough(options, srcFormat, {
+        noop: plan.kind === "noop",
+        width: img.width,
+        height: img.height,
+      })
     ) {
       return {
         out: new Uint8Array(source.bytes),

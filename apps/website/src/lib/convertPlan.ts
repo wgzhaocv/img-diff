@@ -4,7 +4,7 @@
 // 引数の意味と効き方は参照実装 `image_transform` に合わせてある（SPEC §5.4 が正本）。
 // 核は 4 つの規則: 拡大しない / `w`+`h` 両方でのみ fit が効く / bg 既定が出力形式で変わる / no-op 検出。
 
-import type { ConvertFit, ConvertGravity } from "schema";
+import type { ConvertFit, ConvertGravity, ConvertOptions } from "schema";
 
 /** 透明背景を表す番人値（`ConvertOptions.background` に入り得る特別な綴り）。 */
 export const BG_TRANSPARENT = "transparent";
@@ -37,24 +37,68 @@ export function effectiveBackground(bg: string | null | undefined, outFormat: st
   return ALPHA_FORMATS.has(normalizeOutFormat(outFormat)) ? BG_TRANSPARENT : "ffffff";
 }
 
+/** この設定でその画像がどうなるか（計画から導く。画素には触らない）。 */
+export type PlannedOutput = { noop: boolean; width: number; height: number };
+
 /**
- * この 1 件が「何もしなくてよい」か（SPEC §5.4 規則 4）。
- * 寸法指定が無く、出力形式も入力と同じなら**デコードせず元のバイト列をそのまま渡す**。
- * 再符号化すると、何も変えていないのに圧縮とメタデータが変わりバイトが一致しなくなる
- * （実測: 無変換の PNG が 889 → 922 バイト）。読めるが書けない形式（HEIC）もこれで素通りできる。
+ * 原寸が分かっているときの「出力はどうなるか」。**原寸が要る**ので、
+ * `info`（`op:"info"`）が届いていない間は呼べない。
  */
-export function isPassThrough(
-  o: {
-    width: number | null;
-    height: number | null;
-    format: string | null;
-    forceReencode?: boolean;
-  },
+export function plannedOutput(
+  options: ConvertOptions,
+  src: { width: number; height: number },
+): PlannedOutput {
+  const plan = planGeometry({
+    srcW: src.width,
+    srcH: src.height,
+    width: options.width,
+    height: options.height,
+    fit: options.fit,
+    gravity: options.gravity,
+  });
+  const noop = plan.kind === "noop";
+  switch (plan.kind) {
+    case "noop":
+      return { noop, ...src };
+    case "cover":
+      return { noop, width: plan.crop.width, height: plan.crop.height };
+    case "contain":
+      return { noop, width: plan.embed.width, height: plan.embed.height };
+    default:
+      return { noop, width: plan.width, height: plan.height };
+  }
+}
+
+/**
+ * **素通しするか（SPEC §5.4 規則 4）。この 1 箇所が正本。**
+ *
+ * 「何も変えない」指定なら**デコードせず元のバイト列をそのまま出す**。再符号化すると、
+ * 何も変えていないのに圧縮とメタデータが変わってバイトが一致しなくなる
+ * （実測: 無変換の PNG が 889 → 922 バイト）。読めるが書けない形式（HEIC）もこれで素通りできる。
+ *
+ * **原寸が分かっているなら `planned` を渡す。** 画面は原寸が届いた時点で寸法欄を原寸で埋めるので
+ * （`prefillDimensions`）、「寸法欄が空か」だけで見ると「何も変えない」指定を取り逃がす。
+ * 計画が noop なら、寸法欄に数字が入っていても出力は元のバイト列になる。
+ *
+ * `planned` は**その `srcFormat` と同じ画像の原寸**から作った物でなければならない
+ * （別の画像の原寸で作った計画を渡すと、変換すべき物を素通しさせてしまう）。
+ * 原寸が無い / デコードできなかった（`width === 0`）ときは渡さない —— そのときは
+ * 「寸法欄が空か」で見る（**甘い方へは倒さない**）。
+ *
+ * 呼ぶのは `convertSource`（主線程）/ `cannotWriteReason`（画面）/ `applyConvert`（ワーカー）の
+ * 3 つで、**どれもこの関数を通る**。ワーカーだけは更に「元のバイト列が手元に在るか」を見る
+ * （HEVC の HEIC は補助デコーダが生 RGBA に差し替えるので、あちらには元の符号化が残らない）。
+ */
+export function passesThrough(
+  options: ConvertOptions,
   srcFormat: string,
+  planned?: PlannedOutput,
 ): boolean {
-  if (o.forceReencode === true) return false; // 画質を明示した＝再符号化の意思表示
-  if (o.width != null || o.height != null) return false;
-  return o.format == null || o.format === normalizeOutFormat(srcFormat);
+  if (options.forceReencode === true) return false; // 画質を明示した＝再符号化の意思表示
+  if (normalizeOutFormat(options.format ?? srcFormat) !== normalizeOutFormat(srcFormat)) {
+    return false;
+  }
+  return planned ? planned.noop : options.width == null && options.height == null;
 }
 
 /**

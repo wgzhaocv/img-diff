@@ -16,6 +16,18 @@ const pool = poolRef(POOL_SIZE); // 破棄後も作り直せる持ち手（worke
 let running = false; // スキャンの二重起動防止。
 let deleting = false; // 実削除の二重起動防止。
 let clusterToken = 0; // クラスタリングの競合（古い結果の上書き）を防ぐ単調トークン。
+/**
+ * **最後に成功したクラスタリングの組み合わせ。** 画面へ戻るたびに `ScanScreen` の debounce が
+ * 同じしきい値を押し込んでくるので、これが無いと往復のたびに全対比較をやり直す。
+ *
+ * 値ではなく**成功したかどうか**で持つのが要点 —— 単に「値が変わっていないなら戻る」にすると、
+ * `clusterGroup` が投げた後に同じ値でやり直す道が消える（今はその往復が偶然の回復路になっている）。
+ *
+ * **`result` そのものは入れない。** 入れると、次のスキャンが走っている間じゅう前回の
+ * `ScanResult`（画像一覧・`File` の Map・サムネ Blob の Map）が生き残る＝いちばんメモリが要る
+ * 時間に 2 組が同時に居座る。代わりに `replaceResult` が差し替えのたびにこれを捨てる。
+ */
+let clustered: { strictness: Strictness; threshold: number | undefined } | null = null;
 
 type Status = "idle" | "scanning" | "done";
 
@@ -39,26 +51,60 @@ type ScanState = {
 };
 
 export const useScanStore = create<ScanState>((set, get) => {
-  // 厳密度/しきい値/結果からグループを再計算（切替は再スキャン不要・SPEC §2）。
-  // 競合トークンで、古い非同期結果が新しい結果を上書きしないようにする。
-  async function recluster(): Promise<void> {
+  /**
+   * `result` を差し替える**唯一の口**。クラスタ済みの記録も一緒に捨てる。
+   * ここを通さずに `result` を書くと、新しい結果に古い groups が残る。
+   */
+  function replaceResult(result: ScanResult | null, patch: Partial<ScanState> = {}): void {
+    clustered = null;
+    // **`groups` も一緒に捨てる。** groups は result から導いた物なので、作り直す前に
+    // 残しておくと「result からは消えた path が groups には在る」状態になり得る
+    // （削除の直後にクラスタリングが失敗すると、件数も回収量も古いまま、
+    //   もう一度削除を押すと**既に消えた path を消そうとする**）。
+    set({ result, groups: [], ...patch });
+  }
+
+  /**
+   * 厳密度/しきい値/結果から**必要なときだけ**グループを計算して返す（切替は再スキャン不要・SPEC §2）。
+   * 作り直す必要が無い / 競合で追い越された ときは `null`（＝ `groups` を書き換えない）。
+   * **失敗したときは空配列**（今の入力に合う一覧を作れない以上、古い一覧を残さない）。
+   *
+   * **store をここで書かない。** 呼び出し側が 1 回の更新にまとめられるようにするため ——
+   * `ScanScreen` は store 全体を購読しているので、更新を分けると一覧が丸ごと描き直される。
+   */
+  async function clusterIfNeeded(): Promise<DupGroup[] | null> {
     const { result, strictness, threshold } = get();
     if (!result) {
-      set({ groups: [] });
-      return;
+      clustered = null;
+      return [];
+    }
+    // **しきい値は perceptual でしか効かない。** 効かないときは鍵から外す
+    // （`exact` のままスライダを動かしても作り直さない）。
+    const effective = strictness === "perceptual" ? threshold : undefined;
+    if (clustered && clustered.strictness === strictness && clustered.threshold === effective) {
+      return null; // 同じ入力で既に成功している。
     }
     const token = ++clusterToken;
     try {
-      const groups = await clusterGroup(
-        result.images,
-        strictness,
-        strictness === "perceptual" ? threshold : undefined,
-      );
-      if (token === clusterToken) set({ groups });
+      const groups = await clusterGroup(result.images, strictness, effective);
+      if (token !== clusterToken) return null; // 新しい要求が追い越した。
+      clustered = { strictness, threshold: effective };
+      return groups;
     } catch (e) {
-      if (token === clusterToken)
-        toast.error("グループ化に失敗しました", { description: String(e) });
+      if (token !== clusterToken) return null;
+      clustered = null; // 失敗は覚えない（同じ指定でもう一度試せるようにする）。
+      toast.error("グループ化に失敗しました", { description: String(e) });
+      // **空を返す**（`null` = 触らない、ではない）。今の入力に対する groups を作れないのだから、
+      // 前の入力で作った一覧を残してはいけない —— 厳密度を切り替えて失敗したときに、
+      // タブは新しい値なのに一覧は前の値のまま、という食い違いになる。
+      return [];
     }
+  }
+
+  /// 設定を変えたときのやり直し（結果だけを書く）。
+  async function recluster(): Promise<void> {
+    const groups = await clusterIfNeeded();
+    if (groups) set({ groups });
   }
 
   // スキャン実行の共通ラッパ（二重起動防止・状態遷移・空結果/失敗の通知・計測）。
@@ -67,10 +113,10 @@ export const useScanStore = create<ScanState>((set, get) => {
     running = true;
     const releaseHold = pool.hold(); // 走行中は畳ませない（画面を離れても最後まで走る）
     onProgress.cancel(); // 前回の予約フレームが新しい実行の 0/N を上書きしないように
-    set({
+    replaceResult(null, {
       status: "scanning",
-      result: null,
       groups: [],
+      elapsedMs: 0, // 前回の値を、新しい実行の途中で見せない。
       progress: { phase: "hash", processed: 0, total: 0 },
     });
     const start = performance.now();
@@ -83,8 +129,12 @@ export const useScanStore = create<ScanState>((set, get) => {
         set({ status: "idle" });
         return;
       }
-      set({ result, elapsedMs: Math.round(performance.now() - start), status: "done" });
-      void recluster();
+      replaceResult(result, { status: "done" });
+      // **クラスタリングまで含めて計る。** 先に `elapsedMs` を確定すると、グループ化が
+      // 計測から丸ごと抜け落ちる（利用者が待っている時間はそこまで）。
+      // groups と**同じ 1 回の更新**で書く —— 分けると結果一覧がもう一度丸ごと描き直される。
+      const groups = await clusterIfNeeded();
+      set({ ...(groups ? { groups } : {}), elapsedMs: Math.round(performance.now() - start) });
     } catch (e) {
       toast.error("スキャンに失敗しました", {
         description: errText(e),
@@ -133,13 +183,11 @@ export const useScanStore = create<ScanState>((set, get) => {
           fileByPath.delete(p);
           thumbByPath?.delete(p);
         }
-        set({
-          result: {
-            ...result,
-            images: result.images.filter((r) => !deleted.has(r.path)),
-            fileByPath,
-            thumbByPath,
-          },
+        replaceResult({
+          ...result,
+          images: result.images.filter((r) => !deleted.has(r.path)),
+          fileByPath,
+          thumbByPath,
         });
         await recluster();
       }

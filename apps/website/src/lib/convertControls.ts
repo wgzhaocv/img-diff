@@ -4,13 +4,14 @@
 // 純関数（vips にも DOM にも依存しない）なので、そのまま試験できる。
 
 import {
-  isPassThrough,
   normalizeOutFormat,
+  passesThrough,
   WRITABLE_FORMATS,
   parseDim,
   planGeometry,
   saveSpec,
   type ConvertPlan,
+  type PlannedOutput,
 } from "@/lib/convertPlan";
 import type { ConvertFit, ConvertGravity, ConvertOptions } from "schema";
 
@@ -265,20 +266,12 @@ export function mimeOf(outFormat: string): string {
 export function cannotWriteReason(
   options: ConvertOptions,
   srcFormat: string,
-  /**
-   * 計画の結果（原寸が分かるときだけ）。**worker と同じ条件で素通しを判定する**ために要る:
-   * 「寸法を指定していても、その画像には効かない（= plan が noop）」なら元のバイト列が
-   * そのまま出るので、書ける形式かどうかも大きさも関係ない。
-   */
-  planned?: { noop: boolean; width: number; height: number },
+  /** 原寸が分かるときだけ渡す（何を意味するかは `passesThrough` 側が正本）。 */
+  planned?: PlannedOutput,
 ): string | null {
   const out = normalizeOutFormat(options.format ?? srcFormat);
-  const sameFormat = out === normalizeOutFormat(srcFormat);
-  // 素通し（vips.ts の早期 return と同じ条件）。原寸が分からないときは文字列だけで判断する。
-  const passes = planned
-    ? !options.forceReencode && planned.noop && sameFormat
-    : isPassThrough(options, srcFormat);
-  if (passes) return null;
+  // 素通しするなら、書ける形式かどうかも大きさも関係ない（出るのは元のバイト列）。
+  if (passesThrough(options, srcFormat, planned)) return null;
 
   // 拡張子の無いファイルは `""` になる。**空文字は falsy なので、返すと「書ける」と誤判定される。**
   if (out === "") return "この形式 は書き出せません。出力形式を選んでください。";

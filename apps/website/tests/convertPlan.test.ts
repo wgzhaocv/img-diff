@@ -6,14 +6,17 @@ import type { ConvertGravity } from "schema";
 import {
   clampQuality,
   effectiveBackground,
-  isPassThrough,
   normalizeOutFormat,
+  passesThrough,
+  plannedOutput,
   parseHexRgb,
   backgroundVector,
   planGeometry,
   saveSpec,
 } from "@/lib/convertPlan";
-import { outPathFor } from "@/lib/convert";
+import { convertSource, outPathFor } from "@/lib/convert";
+import type { HashPool } from "@/lib/workerPool";
+import { convertOptions } from "./options";
 import { extOf, isConvertibleImage, isScannableImage, uniquePath } from "@/lib/imagePaths";
 import {
   DEFAULT_FORM,
@@ -338,24 +341,24 @@ describe("拡張子の切り出し", () => {
 });
 
 describe("素通し（SPEC §5.4 規則 4）", () => {
-  const base = { width: null, height: null, format: null };
-
   it("寸法も形式も指定していなければ素通し", () => {
-    expect(isPassThrough(base, "png")).toBe(true);
+    expect(passesThrough(convertOptions(), "png")).toBe(true);
   });
 
   it("出力形式が入力と同じ（別名違いを含む）なら素通し", () => {
-    expect(isPassThrough({ ...base, format: "jpg" }, "jpeg")).toBe(true);
-    expect(isPassThrough({ ...base, format: "tiff" }, "tif")).toBe(true);
+    expect(passesThrough(convertOptions({ format: "jpg" }), "jpeg")).toBe(true);
+    expect(passesThrough(convertOptions({ format: "tiff" }), "tif")).toBe(true);
+    // 入力側だけでなく**指定側も**正規化する（片方だけ正規化すると別名で答えが割れる）。
+    expect(passesThrough(convertOptions({ format: "jpeg" }), "jpg")).toBe(true);
   });
 
   it("寸法か形式が変われば素通しではない", () => {
-    expect(isPassThrough({ ...base, width: 100 }, "png")).toBe(false);
-    expect(isPassThrough({ ...base, format: "webp" }, "png")).toBe(false);
+    expect(passesThrough(convertOptions({ width: 100 }), "png")).toBe(false);
+    expect(passesThrough(convertOptions({ format: "webp" }), "png")).toBe(false);
   });
 
   it("読めるが書けない HEIC も、変換不要なら素通りできる", () => {
-    expect(isPassThrough(base, "heic")).toBe(true);
+    expect(passesThrough(convertOptions(), "heic")).toBe(true);
   });
 });
 
@@ -418,14 +421,12 @@ describe("フォーム入力の検証（SPEC §5.4 は w/h を u32 とする）"
 });
 
 describe("画質だけの再圧縮（forceReencode）", () => {
-  const base = { width: null, height: null, format: null };
-
   it("画質を明示したら素通ししない（同じ形式のまま圧縮し直せる）", () => {
-    expect(isPassThrough({ ...base, forceReencode: true }, "jpg")).toBe(false);
+    expect(passesThrough(convertOptions({ forceReencode: true }), "jpg")).toBe(false);
   });
 
   it("触っていなければ従来どおり素通し", () => {
-    expect(isPassThrough({ ...base, forceReencode: false }, "jpg")).toBe(true);
+    expect(passesThrough(convertOptions({ forceReencode: false }), "jpg")).toBe(true);
   });
 
   it("画質を触っていれば「指定がありません」で断られない", () => {
@@ -532,5 +533,97 @@ describe("エンジンの先起こし", () => {
     useConvertStore.setState({ engine: "ready" });
     useConvertStore.getState().setSource(src("b.png"));
     expect(useConvertStore.getState().engine).toBe("ready");
+  });
+});
+
+describe("規則 4: 素通しの判定（passesThrough）", () => {
+  const opts = convertOptions;
+  const src = { width: 100, height: 50 };
+
+  it("原寸を寸法欄に入れただけなら素通しする（原寸を渡さないと取りこぼす）", () => {
+    // **これがこの巡で直したバグそのもの。** 画面は原寸が届いた時点で寸法欄を埋めるので、
+    // 「寸法欄が空か」だけで見ると「何も変えない」指定を永久に見落とす。
+    const o = opts({ width: 100, height: 50 });
+    expect(passesThrough(o, "png")).toBe(false);
+    expect(passesThrough(o, "png", plannedOutput(o, src))).toBe(true);
+  });
+
+  it("計画が noop でなければ素通ししない", () => {
+    const o = opts({ width: 50, height: 25 });
+    expect(passesThrough(o, "png", plannedOutput(o, src))).toBe(false);
+  });
+
+  it("形式が変わるなら素通ししない", () => {
+    const o = opts({ width: 100, height: 50, format: "webp" });
+    expect(passesThrough(o, "png", plannedOutput(o, src))).toBe(false);
+  });
+
+  it("別名は正規化してから比べる（jpeg と jpg は同じ）", () => {
+    const o = opts({ width: 100, height: 50, format: "jpg" });
+    expect(passesThrough(o, "jpeg", plannedOutput(o, src))).toBe(true);
+  });
+
+  it("画質を明示したら素通ししない（再符号化の意思表示）", () => {
+    const o = opts({ width: 100, height: 50, forceReencode: true });
+    expect(passesThrough(o, "png", plannedOutput(o, src))).toBe(false);
+  });
+
+  it("拡大要求は noop なので素通しする", () => {
+    const o = opts({ width: 400, height: 200 });
+    expect(plannedOutput(o, src).noop).toBe(true);
+    expect(passesThrough(o, "png", plannedOutput(o, src))).toBe(true);
+  });
+
+  it("原寸を渡さないときは「寸法欄が空か」で見る（甘い方へ倒さない）", () => {
+    // 原寸が取れなかった（デコードできない）ときの退路。
+    expect(passesThrough(opts(), "png")).toBe(true);
+    expect(passesThrough(opts({ width: 100 }), "png")).toBe(false);
+    expect(passesThrough(opts({ height: 50 }), "png")).toBe(false);
+    expect(passesThrough(opts({ format: "webp" }), "png")).toBe(false);
+    expect(passesThrough(opts({ forceReencode: true }), "png")).toBe(false);
+  });
+});
+
+describe("convertSource が素通しを主線程で済ませる（配線そのもの）", () => {
+  // **ワーカーへ投げたら落ちるプール**を渡す。素通しの判定が効いていれば 1 度も呼ばれない。
+  // 述語の単体試験だけだと、`convertSource` に `planned` を渡し忘れても緑のままになる
+  // （実際、この試験を足すまでそこは自動では守られていなかった）。
+  const refusingPool = {
+    submit: () => {
+      throw new Error("素通しのはずなのにワーカーへ投げた");
+    },
+  } as unknown as HashPool;
+
+  const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3]);
+  const src = { path: "a.png", file: new Blob([bytes], { type: "image/png" }) };
+  const srcDims = { width: 100, height: 50 };
+
+  it("原寸を寸法欄に入れた指定でも、計画を渡せばワーカーを通らない", async () => {
+    const options = convertOptions({ width: 100, height: 50 });
+    const out = await convertSource(
+      src,
+      options,
+      refusingPool,
+      "image/png",
+      plannedOutput(options, srcDims),
+    );
+    expect(out.passedThrough).toBe(true);
+    expect(out.blob.size).toBe(bytes.byteLength); // 元のバイト列がそのまま出る
+    // 素通しはデコードしないので寸法を返さない（SPEC §5.4 規則 4・CLI と同じ約束）。
+    expect([out.width, out.height]).toEqual([0, 0]);
+  });
+
+  it("計画を渡さなければ、同じ指定はワーカーへ行く（＝渡し忘れがここで落ちる）", async () => {
+    const options = convertOptions({ width: 100, height: 50 });
+    await expect(convertSource(src, options, refusingPool, "image/png")).rejects.toThrow(
+      /ワーカーへ投げた/,
+    );
+  });
+
+  it("本当に変換が要る指定は、計画を渡してもワーカーへ行く", async () => {
+    const options = convertOptions({ width: 50, height: 25 });
+    await expect(
+      convertSource(src, options, refusingPool, "image/png", plannedOutput(options, srcDims)),
+    ).rejects.toThrow(/ワーカーへ投げた/);
   });
 });

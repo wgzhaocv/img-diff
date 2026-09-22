@@ -7,7 +7,7 @@
 import type { ConvertOptions } from "schema";
 import type { ConvertResult } from "@/lib/hashTypes";
 import { type HashPool } from "@/lib/workerPool";
-import { isPassThrough, normalizeOutFormat } from "@/lib/convertPlan";
+import { normalizeOutFormat, passesThrough, type PlannedOutput } from "@/lib/convertPlan";
 import { extOf, stemOf } from "@/lib/imagePaths";
 
 /**
@@ -49,10 +49,17 @@ export async function convertSource(
   options: ConvertOptions,
   pool: HashPool,
   outMime: string,
+  planned?: PlannedOutput,
 ): Promise<Output> {
-  if (isPassThrough(options, extOf(src.path))) {
+  const srcFormat = extOf(src.path);
+  if (passesThrough(options, srcFormat, planned)) {
     // **1 バイトも読まない。** `slice` は中身を複製せず、型だけ付け替えた view を返す。
     // 寸法はデコードしないと分からないので 0（SPEC §5.4: 素通しした項目の約束）。
+    //
+    // **ここが唯一「読めるが書けない形式」を救える場所。** ワーカー側にも同じ早期 return は在るが、
+    // あちらは `convertBuffer` の `saveSpec` 検査より後ろなので、heic は辿り着く前に投げる。
+    // 加えて HEVC の heic は `toSource` が生 RGBA に差し替えるので元のバイト列が残らない。
+    // 主線程は常に元の `Blob` を持っているので、規則 4 の「元のバイト列を出す」を満たせる。
     return {
       blob: src.file.slice(0, src.file.size, outMime),
       width: 0,
@@ -61,7 +68,7 @@ export async function convertSource(
     };
   }
   const res = (await pool.submit(
-    { op: "convert", path: src.path, blob: src.file, options, srcFormat: extOf(src.path) },
+    { op: "convert", path: src.path, blob: src.file, options, srcFormat },
     [],
   )) as ConvertResult;
   if (res.error != null || !res.out) throw new Error(res.error ?? "変換に失敗しました");
