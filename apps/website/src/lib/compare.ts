@@ -1,27 +1,23 @@
-import type { DecodeResult, WorkerRequest } from "@/lib/hashTypes";
+import type { DecodeResult, ScoreResult, WorkerRequest } from "@/lib/hashTypes";
 import type { HashPool } from "@/lib/workerPool";
-import { compareScores, diffHighlight, hammingHex } from "@/lib/core";
 import { normalizeFormat } from "@/lib/scan";
 
 // 2 枚比較（compare）のオーケストレーション。SPEC §3/§4・CLI compare.rs と同義。
-// デコード + 白平坦化 + dHash はワーカー（op="decode"）で行い、ペア演算（compare_scores /
-// diff_highlight / hamming）はメインの core で行う。両者とも比較には両画像の全分解能 RGBA が要るため、
-// 2 枚だけなら worker→main へ transfer（コピー無し）して集約するのが素直。大画像で SSIM/diff が
-// メインを一瞬 block し得るが、2 枚なので許容（scan の N 枚のような backpressure は不要）。
+// **計算は全部ワーカー側**で行う: デコード + 白平坦化 + dHash（op="decode"）に続けて、
+// 採点と差分ハイライト（op="score"）も投げる。
+//
+// 採点だけは両画像の全分解能 RGBA が同時に要るので、一度主線程へ戻った RGBA をもう一度
+// ワーカーへ送り返す。**送り返しは transfer なので複製は起きない**（払うのは往復 1 回ぶんだけ）。
+// これを主線程でやると、12MP 2 枚で SSIM と差分の間ずっと画面が固まる —— そこが直したかった所。
+// 副産物として `/compare` は主線程の imgdiff-wasm を一度も起こさなくなった（ハミングも向こうで出す）。
 
 /// tolerance（各チャンネル差の許容）。CLI compare の既定と揃える。今は UI に露出しない。
 const TOLERANCE = 0;
 
 /// 比較の進行フェーズ（UI で「今なにをしているか」を出すため）。
 /// decode=2 枚のデコード（初回はワーカーごとの wasm-vips 初期化コミ・ここが一番重い）、
-/// score=SSIM/PSNR/差分割合、diff=差分ハイライト生成。
-export type ComparePhase = "decode" | "score" | "diff";
-
-/// score/diff はメインスレッドで同期的に走り UI を一瞬 block する。実行前に 1 フレーム譲って
-/// フェーズ表示を先に描かせる（さもないとラベルが更新される前に固まって見える）。
-function yieldToPaint(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
-}
+/// score=SSIM/PSNR/差分割合と差分ハイライト（ワーカー側で 1 回にまとめて計算する）。
+export type ComparePhase = "decode" | "score";
 
 /// 比較対象 1 枚のメタ（表示用。ImageRecord の compare で意味を持つ部分集合）。
 export type CompareImageMeta = {
@@ -68,6 +64,31 @@ async function decodeOne(
   return res as DecodeResult & { rgba: Uint8Array<ArrayBuffer> };
 }
 
+/// 突き合わせをワーカーへ投げる（`op:"score"`）。寸法が一致していれば画素も一緒に渡す。
+/// RGBA は transfer なので**複製されない**代わりに、**戻った後の `da.rgba` / `db.rgba` は
+/// detach されて使えなくなる** —— 呼び出し側はもう読まない。
+async function scorePair(
+  pool: HashPool,
+  da: DecodeResult & { rgba: Uint8Array<ArrayBuffer> },
+  db: DecodeResult & { rgba: Uint8Array<ArrayBuffer> },
+  withPixels: boolean,
+): Promise<ScoreResult> {
+  const pixels = withPixels
+    ? {
+        a: da.rgba.buffer,
+        b: db.rgba.buffer,
+        width: da.width,
+        height: da.height,
+        tolerance: TOLERANCE,
+      }
+    : undefined;
+  const req: WorkerRequest = { op: "score", phashA: da.phash, phashB: db.phash, pixels };
+  const res = await pool.submit(req, pixels ? [pixels.a, pixels.b] : []);
+  if (res.op !== "score") throw new Error("ワーカーから想定外の応答を受け取りました");
+  if (res.error) throw new Error(res.error);
+  return res;
+}
+
 function toMeta(file: File, d: DecodeResult): CompareImageMeta {
   return {
     name: file.name,
@@ -92,30 +113,15 @@ export async function compareFiles(
 
   const shaEqual = da.sha256 === db.sha256;
   const dimsEqual = da.width === db.width && da.height === db.height;
-  const hammingDistance = da.phash && db.phash ? await hammingHex(da.phash, db.phash) : null;
 
-  let pixelEqual: boolean | null = null;
-  let pixelDiffRatio: number | null = null;
-  let ssim: number | null = null;
-  let psnr: number | null = null;
-  let diff: CompareOutcome["diff"];
-
-  // 比較不能（寸法不一致）時は数値は null（SPEC §3）。「比較不能」と「比較して不一致」を区別する。
-  if (dimsEqual) {
-    onProgress?.("score");
-    await yieldToPaint(); // "スコア計算中" を描いてからブロッキング計算に入る。
-    const scores = await compareScores(da.rgba, db.rgba, da.width, da.height, TOLERANCE);
-    pixelDiffRatio = scores.pixelDiffRatio;
-    ssim = scores.ssim;
-    psnr = scores.psnr;
-    // tolerance=0 では「差分ピクセル 0」＝「白平坦化 RGBA のバイト完全一致」＝ SPEC の pixelEqual。
-    pixelEqual = pixelDiffRatio === 0;
-    onProgress?.("diff");
-    await yieldToPaint();
-    // diff_highlight は wasm メモリからコピー済みの新 Uint8Array（非 SAB）を返す → そのまま保持。
-    const rgba = await diffHighlight(da.rgba, db.rgba, TOLERANCE);
-    diff = { width: da.width, height: da.height, rgba };
-  }
+  // 比較不能（寸法不一致）時は連続値を出さない（SPEC §3）。
+  // 「比較不能」と「比較して不一致」を区別する。ハミング距離は層に依らず常に出す。
+  if (dimsEqual) onProgress?.("score");
+  const scored = await scorePair(pool, da, db, dimsEqual);
+  // tolerance=0 では「差分ピクセル 0」＝「白平坦化 RGBA のバイト完全一致」＝ SPEC の pixelEqual。
+  const pixelEqual = scored.pixelDiffRatio == null ? null : scored.pixelDiffRatio === 0;
+  // 差分はワーカーから transfer で来た非 SAB の Uint8Array → そのまま保持（canvas へ view できる）。
+  const diff = scored.diff ? { width: da.width, height: da.height, rgba: scored.diff } : undefined;
 
   return {
     a: toMeta(fileA, da),
@@ -123,10 +129,10 @@ export async function compareFiles(
     shaEqual,
     dimsEqual,
     pixelEqual,
-    pixelDiffRatio,
-    ssim,
-    psnr,
-    hammingDistance,
+    pixelDiffRatio: scored.pixelDiffRatio,
+    ssim: scored.ssim,
+    psnr: scored.psnr,
+    hammingDistance: scored.hammingDistance,
     diff,
   };
 }

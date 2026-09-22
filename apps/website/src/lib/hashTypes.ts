@@ -4,7 +4,11 @@ import type { ConvertOptions } from "schema";
 // 共有契約 `schema` 側が正本なのでそちらを import する）。
 // op="hash": 1 パス目（sha256 + dHash）。op="pixel": 2 パス目（pixelSha256・dHash 衝突バケットのみ）。
 // op="decode": compare（2 枚比較）用。sha256 + dHash に加え、白平坦化後の全分解能 RGBA を返す
-//   （呼び出し側が compare_scores / diff_highlight に使う）。scan の hash/pixel とは別経路。
+//   （続けて op="score" へ渡す）。scan の hash/pixel とは別経路。
+// op="score": compare の採点と差分（SPEC §3/§4）。**2 枚ぶんの RGBA を戻して**ワーカー側で計算する。
+//   主線程でやると 12MP 2 枚で画面ごと固まるので、往復 1 回ぶんを払ってでもあちらへ出す
+//   （transfer なので複製は起きない）。ハミング距離も一緒に出して、主線程が
+//   imgdiff-wasm を起こす理由を無くしている。
 
 // op="convert": 寸法・形式の変換（SPEC §5.4）。scan/compare とは別経路で、
 //   デコード結果ではなく**符号化済みのバイト列**を返す。
@@ -20,6 +24,15 @@ export type WorkerRequest =
   // 主線程で読むと滑動の手応えごと落ちる。
   | { op: "info"; path: string; blob: Blob }
   | { op: "convert"; path: string; blob: Blob; options: ConvertOptions; srcFormat: string }
+  // 2 枚を突き合わせる計算（画素対の演算なので**両方の RGBA が同時に手元に要る**）。
+  // ハミング距離は寸法が違っても出す（SPEC §3）ので常に頼み、連続値と差分は
+  // 寸法が一致したときだけ `pixels` を付けて頼む。
+  | {
+      op: "score";
+      phashA: string | null;
+      phashB: string | null;
+      pixels?: { a: ArrayBuffer; b: ArrayBuffer; width: number; height: number; tolerance: number };
+    }
   | { op: "warm" };
 
 /**
@@ -64,8 +77,19 @@ export type DecodeResult = {
   bytes: number;
   /** 白平坦化後の全分解能 RGBA（compare_scores / diff_highlight 用）。失敗時は無し。非 SAB。 */
   rgba?: Uint8Array<ArrayBuffer>;
-  /** ~256px の webp サムネ（プレビュー用）。失敗時は無し。非 SAB。 */
-  thumb?: Uint8Array<ArrayBuffer>;
+  error?: string;
+};
+
+/** `op:"score"` の応答（SPEC §3/§4）。連続値と差分は `pixels` を頼んだときだけ入る。 */
+export type ScoreResult = {
+  op: "score";
+  /** dHash ハミング距離 0..=64。どちらかがデコード失敗なら null。 */
+  hammingDistance: number | null;
+  pixelDiffRatio: number | null;
+  ssim: number | null;
+  psnr: number | null;
+  /** 差分ハイライト RGBA（品紅=差分・淡グレー=ベース）。可視化専用。非 SAB。 */
+  diff?: Uint8Array<ArrayBuffer>;
   error?: string;
 };
 
@@ -109,6 +133,7 @@ export type WorkerResponse =
   | HashResult
   | PixelResult
   | DecodeResult
+  | ScoreResult
   | InfoResult
   | ConvertResult
   | WarmResult;

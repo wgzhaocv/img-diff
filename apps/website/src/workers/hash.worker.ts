@@ -1,5 +1,10 @@
 /// <reference lib="webworker" />
-import init, { flatten_and_dhash, flatten_on_white } from "@/wasm/imgdiff_wasm";
+import init, {
+  compare_all,
+  flatten_and_dhash,
+  flatten_on_white,
+  hamming_hex,
+} from "@/wasm/imgdiff_wasm";
 import wasmUrl from "@/wasm/imgdiff_wasm_bg.wasm?url";
 import { convertBuffer, decodeCanonical, getVips, imageInfo } from "./vips";
 import { extOf } from "@/lib/imagePaths";
@@ -11,6 +16,7 @@ import type {
   ImageRequest,
   InfoResult,
   PixelResult,
+  ScoreResult,
   WarmResult,
   WorkerRequest,
   WorkerResponse,
@@ -43,12 +49,21 @@ type Decoded =
 
 /// sha256（ファイルバイト）+ デコード（wasm-vips, SPEC §1 手順 1〜3）+ 白平坦化 & dHash（core, 手順 4〜8）。
 /// sha256 はデコード前に先に取る（digest は buffer を detach しないので後続の decode も有効）。
-async function decodeFull(req: ImageRequest): Promise<Decoded> {
+///
+/// **サムネを作るかは呼び手が決める。** scan（`hash`）は一覧に要るので作るが、
+/// compare（`decode`）は原ファイルをそのまま表示するので要らない。要らないのに作ると、
+/// 縮小と webp 符号化を丸ごと払ううえ、HEIC では `decodeCanonical` の早期 return も外れる
+/// （12MP で約 146MB 余計に使う）。
+async function decodeFull(req: ImageRequest, wantThumb: boolean): Promise<Decoded> {
   const sha256 = await sha256Hex(req.bytes);
   const bytes = req.bytes.byteLength;
   try {
     await ensureWasm();
-    const { rgba, width, height, thumb } = await decodeCanonical(req.bytes, true, extOf(req.path));
+    const { rgba, width, height, thumb } = await decodeCanonical(
+      req.bytes,
+      wantThumb,
+      extOf(req.path),
+    );
     const phash = flatten_and_dhash(rgba, width, height); // rgba は in-place 白平坦化される（＝返す RGBA）。
     return { sha256, bytes, phash, width, height, rgba, thumb };
   } catch (e) {
@@ -58,7 +73,7 @@ async function decodeFull(req: ImageRequest): Promise<Decoded> {
 
 /// 1 パス目（scan）: sha256 + dHash + サムネ。全分解能 RGBA は使わないので返さない（GC される）。
 async function hashOne(req: ImageRequest): Promise<HashResult> {
-  const d = await decodeFull(req);
+  const d = await decodeFull(req, true);
   if ("error" in d) {
     return {
       op: "hash",
@@ -103,10 +118,10 @@ async function pixelOne(req: ImageRequest): Promise<PixelResult> {
 }
 
 /// compare（2 枚比較）用: hashOne に加え、白平坦化後の全分解能 RGBA も返す（SPEC §3/§4）。
-/// 呼び出し側が compare_scores / diff_highlight に使う。全分解能デコードなので shrink-on-load は使わない
-/// （pixel 比較の正しさに全画素が要る）。
+/// 呼び出し側は続けて `op:"score"` へ渡す。全分解能デコードなので shrink-on-load は使わない
+/// （pixel 比較の正しさに全画素が要る）。**サムネは作らない**（compare は原ファイルを表示する）。
 async function decodeOne(req: ImageRequest): Promise<DecodeResult> {
-  const d = await decodeFull(req);
+  const d = await decodeFull(req, false);
   if ("error" in d) {
     return {
       op: "decode",
@@ -128,8 +143,45 @@ async function decodeOne(req: ImageRequest): Promise<DecodeResult> {
     height: d.height,
     bytes: d.bytes,
     rgba: d.rgba,
-    thumb: d.thumb,
   };
+}
+
+/// compare の採点と差分（SPEC §3/§4）。**主線程ではなくここで走らせる**のが要点で、
+/// 12MP 2 枚なら数秒ぶん画面が固まっていたのが固まらなくなる。
+/// `compare_all` は `compare_scores` + `diff_highlight` と同じ答えを、束縛層の往復 1 回で返す
+/// （12MP 1 組で約 240MB → 144MB）。
+async function scoreOne(req: Extract<WorkerRequest, { op: "score" }>): Promise<ScoreResult> {
+  const empty: ScoreResult = {
+    op: "score",
+    hammingDistance: null,
+    pixelDiffRatio: null,
+    ssim: null,
+    psnr: null,
+  };
+  try {
+    await ensureWasm();
+    const hammingDistance =
+      req.phashA && req.phashB ? (hamming_hex(req.phashA, req.phashB) ?? null) : null;
+    // 寸法が違えば連続値は出さない（SPEC §3。「比較不能」と「比較して不一致」は別物）。
+    if (!req.pixels) return { ...empty, hammingDistance };
+    const { a, b, width, height, tolerance } = req.pixels;
+    const all = compare_all(new Uint8Array(a), new Uint8Array(b), width, height, tolerance);
+    try {
+      return {
+        op: "score",
+        hammingDistance,
+        pixelDiffRatio: all.pixel_diff_ratio,
+        ssim: all.ssim,
+        psnr: all.psnr,
+        // wasm 線形メモリからコピー済みの新しい非共有 ArrayBuffer（そのまま transfer できる）。
+        diff: all.take_diff() as Uint8Array<ArrayBuffer>,
+      };
+    } finally {
+      all.free(); // wasm-bindgen のオブジェクトは明示解放（leak 防止）。
+    }
+  } catch (e) {
+    return { ...empty, error: errText(e) };
+  }
 }
 
 /// 1 枚を変換する（SPEC §5.4）。デコード経路（decodeFull）とは独立で、
@@ -191,10 +243,8 @@ async function infoOne(req: Extract<WorkerRequest, { op: "info" }>): Promise<Inf
 function transfersOf(res: WorkerResponse): Transferable[] {
   const t: Transferable[] = [];
   if (res.op === "hash" && res.thumb) t.push(res.thumb.buffer);
-  if (res.op === "decode") {
-    if (res.rgba) t.push(res.rgba.buffer);
-    if (res.thumb) t.push(res.thumb.buffer);
-  }
+  if (res.op === "decode" && res.rgba) t.push(res.rgba.buffer);
+  if (res.op === "score" && res.diff) t.push(res.diff.buffer);
   if (res.op === "info" && res.thumb) t.push(res.thumb.buffer);
   if (res.op === "convert" && res.out) t.push(res.out.buffer);
   return t;
@@ -212,19 +262,21 @@ self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
           ? await infoOne(req)
           : req.op === "pixel"
             ? await pixelOne(req)
-            : req.op === "decode"
-              ? await decodeOne(req)
-              : req.op === "hash"
-                ? await hashOne(req)
-                : ({
-                    op: "hash",
-                    path: (req as { path: string }).path,
-                    sha256: "",
-                    phash: null,
-                    width: 0,
-                    height: 0,
-                    bytes: 0,
-                    error: `未知の op: ${String((req as { op: string }).op)}`,
-                  } satisfies HashResult);
+            : req.op === "score"
+              ? await scoreOne(req)
+              : req.op === "decode"
+                ? await decodeOne(req)
+                : req.op === "hash"
+                  ? await hashOne(req)
+                  : ({
+                      op: "hash",
+                      path: (req as { path: string }).path,
+                      sha256: "",
+                      phash: null,
+                      width: 0,
+                      height: 0,
+                      bytes: 0,
+                      error: `未知の op: ${String((req as { op: string }).op)}`,
+                    } satisfies HashResult);
   self.postMessage(res, transfersOf(res));
 };

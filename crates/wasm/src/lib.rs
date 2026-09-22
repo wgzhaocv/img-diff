@@ -92,6 +92,49 @@ pub fn diff_highlight(a: &[u8], b: &[u8], tolerance: u8) -> Vec<u8> {
     diff::highlight(a, b, tolerance)
 }
 
+/// スコアと差分ハイライトを**同じ 1 回の受け渡しで**返す（SPEC §3 + §4）。
+///
+/// `compare_scores` と `diff_highlight` を別々に呼ぶと a/b が**二度ずつ**線形メモリへ複製される
+/// （12MP 1 組で入り 4 枚ぶん + 出し 1 枚ぶん ≒ 240MB）。こちらは入り 2 枚ぶん + 出し 1 枚ぶん
+/// （≒ 144MB）で済む。**呼ぶ core の関数も引数も順序も同じなのでビット一致**
+/// （どちらも純関数なので、分けて呼ぼうがまとめようが答えは変わらない）。
+/// 旧 2 つは退路として残してある。
+#[wasm_bindgen]
+pub struct CompareAll {
+    scores: CompareScores,
+    diff: Vec<u8>,
+}
+
+#[wasm_bindgen]
+impl CompareAll {
+    #[wasm_bindgen(getter)]
+    pub fn pixel_diff_ratio(&self) -> f64 {
+        self.scores.pixel_diff_ratio
+    }
+    #[wasm_bindgen(getter)]
+    pub fn ssim(&self) -> f64 {
+        self.scores.ssim
+    }
+    #[wasm_bindgen(getter)]
+    pub fn psnr(&self) -> f64 {
+        self.scores.psnr
+    }
+    /// 差分 RGBA を**取り出す**（2 度目は空になる）。JS へ渡す時点で 1 回だけ複製されるので、
+    /// getter として毎回複製するのを避ける。
+    pub fn take_diff(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.diff)
+    }
+}
+
+/// 上の `CompareAll` を作る。中身は `compare_scores` + `diff_highlight` と同じ呼び出し。
+#[wasm_bindgen]
+pub fn compare_all(a: &[u8], b: &[u8], width: u32, height: u32, tolerance: u8) -> CompareAll {
+    CompareAll {
+        scores: compare_scores(a, b, width, height, tolerance),
+        diff: diff::highlight(a, b, tolerance),
+    }
+}
+
 // ---- clustering（グループ化）------------------------------------------------
 
 /// 索引済み画像（`ImageRecord[]`）を厳密度でグループ化し `DupGroup[]` を返す。SPEC §5。
@@ -321,6 +364,27 @@ mod native_tests {
     }
 
     /// native で GOLDEN に一致すること（回帰防止 + wasm 側と同じ基準）。
+    /// `compare_all` は `compare_scores` + `diff_highlight` と**同じ答え**でなければならない。
+    /// 束縛層の往復を減らすだけの入口なので、値が 1 ビットでも動いたら意味が変わる。
+    #[test]
+    fn compare_all_matches_the_two_separate_calls() {
+        for (name, a, b, w, h) in compare_pairs() {
+            let separate = compare_scores(&a, &b, w, h, 0);
+            let highlight = diff_highlight(&a, &b, 0);
+            let mut all = compare_all(&a, &b, w, h, 0);
+            assert_eq!(
+                all.pixel_diff_ratio().to_bits(),
+                separate.pixel_diff_ratio().to_bits(),
+                "{name}: pixel_diff_ratio"
+            );
+            assert_eq!(all.ssim().to_bits(), separate.ssim().to_bits(), "{name}: ssim");
+            assert_eq!(all.psnr().to_bits(), separate.psnr().to_bits(), "{name}: psnr");
+            assert_eq!(all.take_diff(), highlight, "{name}: diff");
+            // 取り出したあとは空（二度渡さない）。
+            assert!(all.take_diff().is_empty(), "{name}: take_diff は 1 回だけ");
+        }
+    }
+
     #[test]
     fn parity_matches_golden() {
         assert_parity();

@@ -2,18 +2,41 @@
 /* eslint-disable */
 
 /**
+ * スコアと差分ハイライトを**同じ 1 回の受け渡しで**返す（SPEC §3 + §4）。
+ *
+ * `compare_scores` と `diff_highlight` を別々に呼ぶと a/b が**二度ずつ**線形メモリへ複製される
+ * （12MP 1 組で入り 4 枚ぶん + 出し 1 枚ぶん ≒ 240MB）。こちらは入り 2 枚ぶん + 出し 1 枚ぶん
+ * （≒ 144MB）で済む。**呼ぶ core の関数も引数も順序も同じなのでビット一致**
+ * （どちらも純関数なので、分けて呼ぼうがまとめようが答えは変わらない）。
+ * 旧 2 つは退路として残してある。
+ */
+export class CompareAll {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    /**
+     * 差分 RGBA を**取り出す**（2 度目は空になる）。JS へ渡す時点で 1 回だけ複製されるので、
+     * getter として毎回複製するのを避ける。
+     */
+    take_diff(): Uint8Array;
+    readonly pixel_diff_ratio: number;
+    readonly psnr: number;
+    readonly ssim: number;
+}
+
+/**
  * compare の連続値スコア（SPEC §3）。比較不能（寸法不一致）時は呼ばない前提。
  * `pixel_equal` と `hamming_distance` はここに含めない: 前者は JS が pixelSha256
  * （両画像の crypto.subtle）の一致で、後者は `hamming_hex` で導出する（いずれも CLI
  * `compare.rs`（pixel_sha256 一致 / hash::hamming）と同じ意味に揃える）。
  */
 export class CompareScores {
-  private constructor();
-  free(): void;
-  [Symbol.dispose](): void;
-  readonly pixel_diff_ratio: number;
-  readonly psnr: number;
-  readonly ssim: number;
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    readonly pixel_diff_ratio: number;
+    readonly psnr: number;
+    readonly ssim: number;
 }
 
 /**
@@ -23,16 +46,15 @@ export class CompareScores {
 export function cluster_group(images: any, strictness: string, threshold?: number | null): any;
 
 /**
+ * 上の `CompareAll` を作る。中身は `compare_scores` + `diff_highlight` と同じ呼び出し。
+ */
+export function compare_all(a: Uint8Array, b: Uint8Array, width: number, height: number, tolerance: number): CompareAll;
+
+/**
  * 白平坦化済み・同寸法の RGBA 2 枚から連続値スコアをまとめて計算する（境界越えを 1 回に集約）。
  * SSIM は内部で Rec.601 グレー化してから計算する。SPEC §3。
  */
-export function compare_scores(
-  a: Uint8Array,
-  b: Uint8Array,
-  width: number,
-  height: number,
-  tolerance: number,
-): CompareScores;
+export function compare_scores(a: Uint8Array, b: Uint8Array, width: number, height: number, tolerance: number): CompareScores;
 
 /**
  * 白平坦化済み RGBA から 9x8 dHash（16進16文字）を計算する。SPEC §1 手順 5〜8。
@@ -69,46 +91,32 @@ export function hamming_hex(a: string, b: string): number | undefined;
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
-  readonly memory: WebAssembly.Memory;
-  readonly __wbg_comparescores_free: (a: number, b: number) => void;
-  readonly cluster_group: (a: any, b: number, c: number, d: number) => [number, number, number];
-  readonly compare_scores: (
-    a: number,
-    b: number,
-    c: number,
-    d: number,
-    e: number,
-    f: number,
-    g: number,
-  ) => number;
-  readonly comparescores_pixel_diff_ratio: (a: number) => number;
-  readonly comparescores_psnr: (a: number) => number;
-  readonly comparescores_ssim: (a: number) => number;
-  readonly dhash_hex: (a: number, b: number, c: number, d: number) => [number, number];
-  readonly diff_highlight: (
-    a: number,
-    b: number,
-    c: number,
-    d: number,
-    e: number,
-  ) => [number, number];
-  readonly flatten_and_dhash: (
-    a: number,
-    b: number,
-    c: any,
-    d: number,
-    e: number,
-  ) => [number, number];
-  readonly flatten_on_white: (a: number, b: number, c: any) => void;
-  readonly hamming_hex: (a: number, b: number, c: number, d: number) => number;
-  readonly __wbindgen_malloc: (a: number, b: number) => number;
-  readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
-  readonly __wbindgen_exn_store: (a: number) => void;
-  readonly __externref_table_alloc: () => number;
-  readonly __wbindgen_externrefs: WebAssembly.Table;
-  readonly __externref_table_dealloc: (a: number) => void;
-  readonly __wbindgen_free: (a: number, b: number, c: number) => void;
-  readonly __wbindgen_start: () => void;
+    readonly memory: WebAssembly.Memory;
+    readonly __wbg_compareall_free: (a: number, b: number) => void;
+    readonly __wbg_comparescores_free: (a: number, b: number) => void;
+    readonly cluster_group: (a: any, b: number, c: number, d: number) => [number, number, number];
+    readonly compare_all: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
+    readonly compare_scores: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
+    readonly compareall_pixel_diff_ratio: (a: number) => number;
+    readonly compareall_psnr: (a: number) => number;
+    readonly compareall_ssim: (a: number) => number;
+    readonly compareall_take_diff: (a: number) => [number, number];
+    readonly dhash_hex: (a: number, b: number, c: number, d: number) => [number, number];
+    readonly diff_highlight: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+    readonly flatten_and_dhash: (a: number, b: number, c: any, d: number, e: number) => [number, number];
+    readonly flatten_on_white: (a: number, b: number, c: any) => void;
+    readonly hamming_hex: (a: number, b: number, c: number, d: number) => number;
+    readonly comparescores_pixel_diff_ratio: (a: number) => number;
+    readonly comparescores_psnr: (a: number) => number;
+    readonly comparescores_ssim: (a: number) => number;
+    readonly __wbindgen_malloc: (a: number, b: number) => number;
+    readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+    readonly __wbindgen_exn_store: (a: number) => void;
+    readonly __externref_table_alloc: () => number;
+    readonly __wbindgen_externrefs: WebAssembly.Table;
+    readonly __externref_table_dealloc: (a: number) => void;
+    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
+    readonly __wbindgen_start: () => void;
 }
 
 export type SyncInitInput = BufferSource | WebAssembly.Module;
@@ -131,9 +139,4 @@ export function initSync(module: { module: SyncInitInput } | SyncInitInput): Ini
  *
  * @returns {Promise<InitOutput>}
  */
-export default function __wbg_init(
-  module_or_path?:
-    | { module_or_path: InitInput | Promise<InitInput> }
-    | InitInput
-    | Promise<InitInput>,
-): Promise<InitOutput>;
+export default function __wbg_init (module_or_path?: { module_or_path: InitInput | Promise<InitInput> } | InitInput | Promise<InitInput>): Promise<InitOutput>;

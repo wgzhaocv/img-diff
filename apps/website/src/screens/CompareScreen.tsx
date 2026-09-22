@@ -5,12 +5,13 @@ import { CompareView } from "@/components/CompareView";
 import { useCompareStore } from "@/lib/stores/compareStore";
 import type { ComparePhase } from "@/lib/compare";
 
-// フェーズ表示（「今なにをしているか」＋ 3 段の進捗）。UI.md 原則3: 派手なスピナーより線形バー + 等幅表記。
+// フェーズ表示（「今なにをしているか」＋進捗）。UI.md 原則3: 派手なスピナーより線形バー + 等幅表記。
+// 採点と差分はワーカー側の 1 回の計算に畳んだので、段は 2 つ（以前は差分が別段だった）。
 const PHASE: Record<ComparePhase, { label: string; step: number; pct: number }> = {
   decode: { label: "画像を読み込み中…", step: 1, pct: 30 },
-  score: { label: "スコアを計算中（SSIM / PSNR / 差分割合）…", step: 2, pct: 65 },
-  diff: { label: "差分ハイライトを生成中…", step: 3, pct: 90 },
+  score: { label: "スコアと差分を計算中（SSIM / PSNR / 差分割合）…", step: 2, pct: 75 },
 };
+const PHASE_COUNT = Object.keys(PHASE).length;
 
 export function CompareScreen() {
   const { fileA, fileB, outcome, status, phase, pick } = useCompareStore();
@@ -32,7 +33,9 @@ export function CompareScreen() {
         <div className="mx-auto max-w-md space-y-2" role="status" aria-live="polite">
           <div className="flex items-center justify-between text-sm text-muted-foreground">
             <span>{PHASE[phase].label}</span>
-            <span className="num">{PHASE[phase].step} / 3</span>
+            <span className="num">
+              {PHASE[phase].step} / {PHASE_COUNT}
+            </span>
           </div>
           <Progress value={PHASE[phase].pct} />
           {phase === "decode" ? (

@@ -212,8 +212,8 @@ export async function decodeCanonical(
 
   // **補助デコーダ経由（HEIC）は、もう欲しい形そのもの。** libheif が返すのは
   // sRGB の straight-alpha RGBA（4band・uchar）で、vips を通しても
-  // **入出力の sha256 が一致する**ことを確かめてある。往復させると 12MP で
-  // 約 146MB（vips ヒープへの複製 + writeToMemory + JS へのコピー）を無駄に使う。
+  // **画素が 1 バイトも変わらない**（`tests/heic.test.ts` が両経路を突き合わせている）。
+  // 往復させると 12MP で約 146MB（vips ヒープへの複製 + writeToMemory + JS へのコピー）を無駄に使う。
   if (source.kind === "rgba" && !wantThumb) {
     return {
       rgba: source.data as Uint8Array<ArrayBuffer>,
@@ -222,6 +222,14 @@ export async function decodeCanonical(
     };
   }
 
+  return applyDecode(vips, source, wantThumb);
+}
+
+/**
+ * `decodeCanonical` の vips 部分（同期）。`applyInfo` / `applyConvert` と同じ理由で切り出してある
+ * —— `Vips` を引数で受ける形にしておくと、node の試験からそのまま呼べる。
+ */
+export function applyDecode(vips: Vips, source: DecodeSource, wantThumb: boolean): DecodedImage {
   const { keep, dispose } = trashBag();
   try {
     const rotated = sourceImage(vips, source, keep);

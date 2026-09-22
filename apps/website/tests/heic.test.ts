@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vite-plus/test";
 import type { ConvertOptions } from "schema";
-import { applyConvert, applyInfo, type DecodeSource, type Vips } from "@/workers/vips";
+import { applyConvert, applyDecode, applyInfo, type DecodeSource, type Vips } from "@/workers/vips";
 import { applyHeicDecode, isAv1Heif, type HeifDecoder, type LibHeif } from "@/workers/heic";
 import { passesThrough, plannedOutput, saveSpec } from "@/lib/convertPlan";
 import { convertOptions } from "./options";
@@ -84,6 +84,20 @@ describe("HEVC の HEIC（wasm-vips では読めない形式）", () => {
   it("補助デコーダの結果は再現する（libheif を上げて画素が変わったら落ちる）", () => {
     expect([source.width, source.height]).toEqual([300, 500]);
     expect(createHash("sha256").update(source.data).digest("hex")).toBe(RGBA_SHA256);
+  });
+
+  it("vips を往復させても画素は 1 バイトも変わらない（早期 return が成り立つ根拠）", () => {
+    // compare（`op:"decode"`）はサムネを要らないと言うので、HEIC はこの早期 return に乗る
+    // ＝ **vips を通らない経路が初めて実際に使われる**。通した場合と同じ画素になることを
+    //    ここで固定しておく（コメントで「確かめてある」と言うだけにしない）。
+    const roundTripped = applyDecode(vips, source, false);
+    expect([roundTripped.width, roundTripped.height]).toEqual([source.width, source.height]);
+    expect(createHash("sha256").update(roundTripped.rgba).digest("hex")).toBe(RGBA_SHA256);
+    // サムネを頼んでも画素の側は変わらない（頼むと往復するのはそのためだけ）。
+    const withThumb = applyDecode(vips, source, true);
+    expect(createHash("sha256").update(withThumb.rgba).digest("hex")).toBe(RGBA_SHA256);
+    expect(withThumb.thumb).toBeDefined();
+    expect(roundTripped.thumb).toBeUndefined();
   });
 
   it("解いた画素はそのまま変換に流せる（png / jpg）", () => {
