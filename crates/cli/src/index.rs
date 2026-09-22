@@ -14,6 +14,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+/// **scan / find / clean の既定 `--ext`。**
+/// 正本は `packages/schema/src/index.ts` の `SCANNABLE_EXTS` で、web の scan と**同じ集合**でなければ
+/// ならない（片方だけが拾う画像が在ると同じフォルダで違う結果が出る＝SPEC §1 の parity が崩れる）。
+/// Rust から TS は読めないので、下の試験が「この文字列を解析した結果」を正本の写しと突き合わせる。
+pub const DEFAULT_EXT: &str = "jpg,jpeg,png,webp,gif,bmp,tif,tiff,heic,heif,avif";
+
 /// カンマ区切りの拡張子文字列を、小文字・ドット無しの一覧へ正規化する。
 /// `index_folder` の拡張子マッチ（小文字比較）と対を成すため、パースはここに置く。
 pub fn parse_exts(csv: &str) -> Vec<String> {
@@ -310,6 +316,20 @@ mod tests {
         err.downcast_ref::<CliError>()
             .expect("CliError のはず")
             .code
+    }
+
+    /// 既定 `--ext` が web の `SCANNABLE_EXTS`（`packages/schema/src/index.ts`）と同じ集合であること。
+    /// **`tif` と `tiff` は両方要る** —— `parse_exts` は別名を畳まないので、片方しか無いと
+    /// その綴りのファイルを取りこぼす。**`svg` は入れない** —— web は resvg、CLI は libvips の
+    /// svgload と描画器が別で、dHash が一致する保証が無い。
+    #[test]
+    fn default_ext_matches_schema() {
+        assert_eq!(
+            parse_exts(DEFAULT_EXT),
+            [
+                "jpg", "jpeg", "png", "webp", "gif", "bmp", "tif", "tiff", "heic", "heif", "avif"
+            ]
+        );
     }
 
     /// 打ち間違えたパスが「0 件でした」という**成功に見える答え**にならないこと。

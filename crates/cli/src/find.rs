@@ -26,7 +26,7 @@ pub struct FindArgs {
     #[arg(long, default_value_t = true)]
     recurse: bool,
     /// カンマ区切りの対象拡張子
-    #[arg(long, default_value = "jpg,jpeg,png,webp,gif,bmp,tiff,heic,heif,avif")]
+    #[arg(long, default_value = index::DEFAULT_EXT)]
     ext: String,
     /// 上位 N 件だけ返す（層順→距離昇順で上位。省略時は全件）
     #[arg(long)]

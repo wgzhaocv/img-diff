@@ -1,35 +1,26 @@
 // 画像パスまわりの共有部品（scan / convert が使う）。
 // 「どれを画像とみなすか」「拡張子の切り出し」「path の一意化」「決定的な並び」を 1 箇所に置く。
 
+import { SCANNABLE_EXTS } from "schema";
+
 /**
- * **scan が拾う拡張子。CLI の既定 `--ext` と揃える。**
+ * **scan が拾う拡張子。正本は `schema` の `SCANNABLE_EXTS`**（CLI の既定 `--ext` と同じ集合）。
  * scan は web と CLI で同じ結果を出す契約（SPEC §1 の dHash parity）があるので、
- * ここを CLI より広げると「web だけが拾う画像」が生まれて結果が食い違う。
+ * ここで足し引きしない —— 変えるなら正本を変えて CLI も一緒に動かす。
  */
-const SCANNABLE_EXTS = new Set([
-  "jpg",
-  "jpeg",
-  "png",
-  "webp",
-  "gif",
-  "bmp",
-  "tif",
-  "tiff",
-  "heic",
-  "heif",
-  "avif",
-  "svg",
-]);
+const SCANNABLE = new Set<string>(SCANNABLE_EXTS);
 
 /**
  * **convert が読み込む拡張子。** scan と違って CLI との結果一致の契約が無い（変換は web のみ・
- * SPEC §5.4）ので、wasm-vips が読める物はすべて受ける。`jxl` はここにだけ在る
- * ——CLI の Windows 版が libjxl 非同梱なため、scan 側に足すと parity が崩れる。
+ * SPEC §5.4）ので、wasm-vips が読める物はすべて受ける。
+ * `jxl` / `svg` はここにだけ在る —— CLI の Windows 版は libjxl 非同梱、
+ * svg は web(resvg) と CLI(libvips) で描画器が別なので、scan 側に足すと parity が崩れる。
  */
 const CONVERTIBLE_EXTS = new Set(
   [
     ...SCANNABLE_EXTS,
     "jxl", // web のみ（CLI の Windows 版は libjxl 非同梱）
+    "svg", // web のみ（resvg で読める。書き出しは不可＝WRITABLE_FORMATS に無い）
     "ppm", // SPEC §5.4 の表で読める側
   ].filter(
     // bmp は wasm-vips に loader が無い（実測: "not in a known format"）。
@@ -64,7 +55,6 @@ export function baseNameOf(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1);
 }
 
-/** scan の対象か（CLI の既定 ext と同じ集合）。 */
 /**
  * ルート相対パスの**親ディレクトリ**（`'/'` 区切り・ルート直下は空文字）。
  * `scan` が「そのファイルが在ったフォルダを最後まで列挙できたか」を引くのに使う。
@@ -74,11 +64,12 @@ export function dirOf(path: string): string {
   return at < 0 ? "" : path.slice(0, at);
 }
 
+/** scan の対象か（CLI の既定 ext と同じ集合）。 */
 export function isScannableImage(name: string): boolean {
-  return SCANNABLE_EXTS.has(extOf(name));
+  return SCANNABLE.has(extOf(name));
 }
 
-/** convert の入力として読めるか（scan の集合 + jxl）。 */
+/** convert の入力として読めるか（scan の集合 + jxl / svg / ppm − bmp）。 */
 export function isConvertibleImage(name: string): boolean {
   return CONVERTIBLE_EXTS.has(extOf(name));
 }

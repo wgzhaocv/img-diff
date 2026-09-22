@@ -172,7 +172,10 @@ libvips が §1 手順 1〜3 と同じ経路で描画し、透明（straight alp
   ラスタ拡大でなく **libvips の `scale` で高精細に再描画**する（scale=2 なら 200×200 の SVG → 400×400 PNG）。ラスタ入力には効かない。
 - 出力は `RenderReport`（`kind:"render"`）: `scale` + `items[].{src, dst, width, height, bytes, status, error?}` + `stats{scanned, rendered, skipped, failed, elapsedMs}`。
   `status` は `rendered` / `skipped` / `failed`。1 件の失敗で全体は止めず per-file に記録。`items` は `src` 昇順（決定性・§4）。
-- **注意**: 重複検出/比較目的なら render は不要（scan/compare/find は `.svg` を直接扱える）。render は PNG そのものが欲しいとき用。
+- **注意**: 重複検出/比較目的なら render は不要。`compare` はパスを直に受けるので `.svg` をそのまま扱え、
+  `scan` / `find` / `clean` も `--ext svg` を明示すれば拾える（**既定の `--ext` には入っていない** ——
+  web は resvg、CLI は libvips の svgload と描画器が別で、dHash が一致する保証が無いため。§1 の parity 参照）。
+  render は PNG そのものが欲しいとき用。
 
 ## 5.4 convert（寸法・形式の変換）
 

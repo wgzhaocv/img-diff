@@ -124,7 +124,7 @@ export const useScanStore = create<ScanState>((set, get) => {
       const result = await doScan();
       if (result.images.length === 0) {
         toast.info("対象の画像が見つかりませんでした", {
-          description: "jpg / png / webp / heic / avif / svg などを含むフォルダを選んでください。",
+          description: "jpg / png / webp / heic / avif / tiff などを含むフォルダを選んでください。",
         });
         set({ status: "idle" });
         return;
