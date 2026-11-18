@@ -99,6 +99,13 @@ function emitRouteFallbacks(): PluginOption {
 // dev サーバでも COOP/COEP を付け cross-origin isolation を有効化する
 // （SharedArrayBuffer が要る wasm-vips のため。本番は public/_headers で付与）。
 export default defineConfig({
+  test: {
+    // Vitest v4 compatibility: preserve mock call history.
+    // Remove after tests no longer rely on calls from setup or earlier tests.
+    // https://viteplus.dev/guide/vitest-v5#remove-unneeded-compatibility-settings
+    // https://vitest.dev/guide/migration/#clearmocks-is-enabled-by-default
+    clearMocks: false,
+  },
   plugins: [
     react(),
     tailwindcss(),

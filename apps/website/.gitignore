@@ -30,3 +30,4 @@ dist-ssr
 public/vips/
 # libheif の wasm（HEVC の HEIC 用の補助デコーダ。vite.config.ts::copyLibheif でコピー）
 public/libheif/
+.vitest/
